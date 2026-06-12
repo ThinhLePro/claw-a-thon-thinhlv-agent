@@ -1,0 +1,6 @@
+mcp>=1.27.0
+junos-eznc>=2.8.0
+lxml>=5.0.0
+netmiko
+napalm
+scrapli

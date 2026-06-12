@@ -1,0 +1,27 @@
+# === Secrets & Credentials ===
+.env
+*.credentials.json
+.greennode.json
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+mcp-env/
+
+# === AgentBase ===
+.agentbase/
+.agentbase-state.json
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db

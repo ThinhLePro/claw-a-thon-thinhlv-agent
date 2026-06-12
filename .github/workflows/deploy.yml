@@ -1,0 +1,68 @@
+name: Deploy Agent to GreenNode Cloud
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'dc-network-engineer-agent/**'
+      - 'shared/**'
+  workflow_dispatch:
+    inputs:
+      description:
+        description: 'Mô tả thủ công cho phiên bản này (nếu bỏ trống sẽ tự động generate)'
+        required: false
+        default: ''
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Yêu cầu fetch full history để git log/diff hoạt động chính xác
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Setup jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Build and Deploy to GreenNode Cloud
+        env:
+          GREENNODE_CLIENT_ID: ${{ secrets.GREENNODE_CLIENT_ID }}
+          GREENNODE_CLIENT_SECRET: ${{ secrets.GREENNODE_CLIENT_SECRET }}
+        run: |
+          # Xác định commit trước đó để tính changelog
+          PREV_COMMIT=""
+          
+          # Nếu chạy bằng trigger push thông thường
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BEFORE_SHA="${{ github.event.before }}"
+            if [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+              # Kiểm tra xem commit có tồn tại trên local repository không
+              if git cat-file -e "$BEFORE_SHA" 2>/dev/null; then
+                PREV_COMMIT="$BEFORE_SHA"
+              fi
+            fi
+          fi
+          
+          # Tạo command chạy script
+          CMD=("./dc-network-engineer-agent/deploy.sh")
+          
+          # Nạp mô tả thủ công nếu được trigger qua workflow_dispatch
+          if [ -n "${{ github.event.inputs.description }}" ]; then
+            CMD+=("-m" "${{ github.event.inputs.description }}")
+          fi
+          
+          # Nạp commit trước đó nếu xác định được
+          if [ -n "$PREV_COMMIT" ]; then
+            CMD+=("--since" "$PREV_COMMIT")
+          fi
+          
+          # Cấp quyền chạy script và thực thi
+          chmod +x ./dc-network-engineer-agent/deploy.sh
+          "${CMD[@]}"

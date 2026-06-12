@@ -1,0 +1,36 @@
+services:
+  # ============================================
+  # MCP Server — Juniper NETCONF Gateway
+  # Runs on local/on-prem machine with access to lab network (10.116.0.0/22)
+  # ============================================
+  mcp-server:
+    build: ./mcp-server
+    container_name: juniper-mcp-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file: ./mcp-server/.env
+    volumes:
+      - ./shared:/app/shared:ro
+    networks:
+      - mcp-net
+
+  # ============================================
+  # DC Network Engineer Agent (local testing only)
+  # In production, this is deployed to GreenNode cloud via /agentbase-deploy
+  # ============================================
+  # agent:
+  #   build: ./dc-network-engineer-agent
+  #   container_name: dc-network-engineer-agent
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8080:8080"
+  #   env_file: ./dc-network-engineer-agent/.env
+  #   depends_on:
+  #     - mcp-server
+  #   networks:
+  #     - mcp-net
+
+networks:
+  mcp-net:
+    driver: bridge
