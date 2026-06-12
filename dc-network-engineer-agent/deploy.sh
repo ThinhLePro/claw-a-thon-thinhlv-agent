@@ -163,7 +163,8 @@ else
     echo "Using generated description (non-interactive or message provided)."
 fi
 
-DESCRIPTION=$(cat "$CHANGELOG_FILE")
+# Keep description as a single line to avoid argument parsing issues in CLI scripts
+DESCRIPTION=${DESCRIPTION_ARG:-"Deploying update for dc-network-engineer on GreenNode Cloud"}
 
 # 6. Build the Docker Image
 TAG="v$(date +%Y%m%d%H%M%S)"
