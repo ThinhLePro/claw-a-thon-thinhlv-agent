@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import httpx
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
@@ -17,6 +18,10 @@ NETCONF_USER = os.environ.get("NETCONF_USER", "network-agent")
 NETCONF_PASSWORD = os.environ.get("NETCONF_PASSWORD", "")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
 DEVICES_FILE = os.environ.get("DEVICES_FILE", "/app/shared/devices.json")
+
+# Monitoring configurations (Prometheus & Loki)
+PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090")
+LOKI_URL = os.environ.get("LOKI_URL", "http://loki:3100")
 
 if not NETCONF_PASSWORD:
     raise ValueError(
@@ -742,6 +747,83 @@ def git_operation(
         return output
     except Exception as e:
         return f"Error: Git operation failed: {e}"
+
+
+@mcp.tool()
+async def get_device_status(device_ip: str) -> str:
+    """Check the status of a network device using SNMP metrics from Prometheus.
+
+    Args:
+        device_ip: The IP address of the device.
+    """
+    async with httpx.AsyncClient() as client:
+        # Simple query to check if we are getting any metrics for this device
+        query = f'up{{instance="{device_ip}:9273"}}'
+        try:
+            response = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query})
+            data = response.json()
+            if data["status"] == "success" and data["data"]["result"]:
+                status = data["data"]["result"][0]["value"][1]
+                return f"Device {device_ip} is {'UP' if status == '1' else 'DOWN'}."
+            else:
+                return f"No status data found for device {device_ip}."
+        except Exception as e:
+            return f"Error querying Prometheus: {str(e)}"
+
+
+@mcp.tool()
+async def get_interface_traffic(device_ip: str, interface_name: str) -> str:
+    """Get current interface traffic for a device.
+
+    Args:
+        device_ip: The IP address of the device.
+        interface_name: The name of the interface.
+    """
+    async with httpx.AsyncClient() as client:
+        # Example query for interface traffic (bits/sec)
+        # Using rate() on ifHCInOctets and ifHCOutOctets
+        query_in = f'rate(interface_traffic_ifHCInOctets{{instance="{device_ip}:9273", ifName="{interface_name}"}}[5m]) * 8'
+        query_out = f'rate(interface_traffic_ifHCOutOctets{{instance="{device_ip}:9273", ifName="{interface_name}"}}[5m]) * 8'
+        
+        try:
+            res_in = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query_in})
+            res_out = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query_out})
+            
+            data_in = res_in.json()
+            data_out = res_out.json()
+            
+            val_in = data_in["data"]["result"][0]["value"][1] if data_in["data"]["result"] else "0"
+            val_out = data_out["data"]["result"][0]["value"][1] if data_out["data"]["result"] else "0"
+            
+            return f"Traffic on {interface_name} for {device_ip}:\nInbound: {float(val_in)/1000000:.2f} Mbps\nOutbound: {float(val_out)/1000000:.2f} Mbps"
+        except Exception as e:
+            return f"Error querying Prometheus: {str(e)}"
+
+
+@mcp.tool()
+async def get_device_logs(device_ip: str, limit: int = 10) -> str:
+    """Query Syslogs from Loki for a specific device.
+
+    Args:
+        device_ip: The IP address of the device.
+        limit: Number of syslog lines to retrieve (default 10).
+    """
+    async with httpx.AsyncClient() as client:
+        # LogQL query to fetch logs from Loki
+        query = f'{{job="syslog", host="{device_ip}"}}'
+        try:
+            response = await client.get(f"{LOKI_URL}/loki/api/v1/query_range", params={"query": query, "limit": limit})
+            data = response.json()
+            logs = []
+            if data["status"] == "success" and data["data"]["result"]:
+                for result in data["data"]["result"]:
+                    for val in result["values"]:
+                        logs.append(val[1])
+                return "\n".join(logs)
+            else:
+                return f"No logs found for device {device_ip}."
+        except Exception as e:
+            return f"Error querying Loki: {str(e)}"
 
 
 if __name__ == "__main__":

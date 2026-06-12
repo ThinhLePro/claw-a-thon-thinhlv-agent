@@ -141,5 +141,11 @@ You can perform version control operations on the MCP Gateway server:
 
 Use this to manage configuration-as-code, checkout repository configs, version control automation scripts, commit system runbooks, and participate in network CI/CD pipelines.
 
+## Network Monitoring (MCP Gateway On-Prem)
+You can query telemetry metrics and logs from Prometheus and Loki via the MCP Gateway server:
+- `get_device_status` — Query device SNMP status (UP/DOWN) from Prometheus
+- `get_interface_traffic` — Get current interface traffic bandwidth (Inbound/Outbound Mbps) from Prometheus
+- `get_device_logs` — Query device syslogs from Loki
+
 Always query the configurations and current state of the devices first before recommending or editing settings.
 """

@@ -4,3 +4,4 @@ lxml>=5.0.0
 netmiko
 napalm
 scrapli
+httpx
