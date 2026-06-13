@@ -12,6 +12,7 @@ import threading
 import logging
 from datetime import datetime
 
+
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_agent
@@ -30,6 +31,7 @@ from langgraph.config import get_config
 from system_prompt import SYSTEM_PROMPT
 from mcp_client import discover_mcp_tools
 from agent_tools import read_file, write_file, list_workspace_files, http_request
+from context_manager import ConversationCompactor
 
 load_dotenv()
 
@@ -74,6 +76,16 @@ llm = ChatOpenAI(
     model=LLM_MODEL,
     base_url=LLM_BASE_URL,
     api_key=LLM_API_KEY,
+)
+
+# --- Conversation Compactor (intelligent context management) ---
+# Instead of naively trimming messages (which loses context), we summarize
+# older conversation history when approaching the model's context limit.
+# Inspired by Claude Code's auto-compact and Gemini CLI's /compress.
+compactor = ConversationCompactor(
+    llm=llm,
+    memory_client=memory_client,
+    memory_id=MEMORY_ID,
 )
 
 # --- MCP Server Configuration ---
@@ -180,7 +192,7 @@ mcp_tools = discover_mcp_tools(MCP_SERVER_URL)
 logger.info(f"Successfully registered {len(mcp_tools)} MCP tools")
 
 
-# --- Create Agent with Checkpointer ---
+# --- Create Agent with Checkpointer + Conversation Compaction ---
 agent = create_agent(
     llm,
     tools=[
@@ -200,23 +212,53 @@ agent = create_agent(
     ],
     system_prompt=SYSTEM_PROMPT,
     checkpointer=checkpointer,
+    message_modifier=compactor,
 )
 
 
 # --- Core message processing (shared by HTTP + Telegram) ---
 def process_message(message: str, user_id: str, session_id: str) -> str:
-    """Process a message through the agent and return the response text."""
+    """Process a message through the agent and return the response text.
+
+    Includes fallback error handling: if the LLM still returns a token
+    overflow error (edge case), forces an aggressive compaction and retries.
+    """
     config = {
         "configurable": {
             "thread_id": session_id,
             "actor_id": user_id,
         }
     }
-    result = agent.invoke(
-        {"messages": [{"role": "user", "content": message}]},
-        config=config,
-    )
-    return result["messages"][-1].content
+    try:
+        result = agent.invoke(
+            {"messages": [{"role": "user", "content": message}]},
+            config=config,
+        )
+        return result["messages"][-1].content
+    except Exception as e:
+        error_msg = str(e)
+        if "context length" in error_msg or "input_tokens" in error_msg:
+            logger.warning(
+                f"Token overflow despite compaction, forcing aggressive retry: {e}"
+            )
+            # Force compaction with a much lower threshold and retry
+            compactor.compaction_threshold = compactor.max_context_tokens // 2
+            try:
+                result = agent.invoke(
+                    {"messages": [{"role": "user", "content": message}]},
+                    config=config,
+                )
+                return result["messages"][-1].content
+            except Exception as retry_err:
+                logger.error(f"Retry also failed: {retry_err}")
+                return (
+                    "⚠️ Xin lỗi, cuộc hội thoại quá dài và không thể tiếp tục. "
+                    "Vui lòng bắt đầu phiên mới để tiếp tục làm việc."
+                )
+            finally:
+                # Restore original threshold
+                compactor.compaction_threshold = compactor.max_context_tokens * 80 // 100
+        raise
 
 
 # --- HTTP Entrypoint (AgentBase Runtime) ---
