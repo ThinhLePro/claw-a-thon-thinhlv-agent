@@ -58,8 +58,8 @@ if [ -z "${GREENNODE_CLIENT_ID:-}" ] || [ -z "${GREENNODE_CLIENT_SECRET:-}" ]; t
 fi
 
 # 3. Registry & Runtime config
-RUNTIME_NAME="dc-network-engineer"
-RUNTIME_ID="runtime-62933765-2575-490c-9007-619079849e39"
+RUNTIME_NAME="greennode-network-engineer"
+RUNTIME_ID="runtime-75ec3308-ccfb-4199-a518-9bb66be7bd22"
 FLAVOR="runtime-s2-general-4x8"
 
 echo "Fetching Container Registry repository information..."
