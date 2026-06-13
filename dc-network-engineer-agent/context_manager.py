@@ -15,7 +15,7 @@ long sessions.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Any
 
 from langchain_core.messages import (
     BaseMessage,
