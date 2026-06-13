@@ -31,7 +31,7 @@ from langgraph.config import get_config
 from system_prompt import SYSTEM_PROMPT
 from mcp_client import discover_mcp_tools
 from agent_tools import read_file, write_file, list_workspace_files, http_request
-from context_manager import ConversationCompactor
+from context_manager import ConversationCompactor, ConversationCompactorMiddleware
 
 load_dotenv()
 
@@ -87,6 +87,7 @@ compactor = ConversationCompactor(
     memory_client=memory_client,
     memory_id=MEMORY_ID,
 )
+compactor_middleware = ConversationCompactorMiddleware(compactor)
 
 # --- MCP Server Configuration ---
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://49.213.77.221:8000/sse")
@@ -212,7 +213,7 @@ agent = create_agent(
     ],
     system_prompt=SYSTEM_PROMPT,
     checkpointer=checkpointer,
-    message_modifier=compactor,
+    middleware=[compactor_middleware],
 )
 
 

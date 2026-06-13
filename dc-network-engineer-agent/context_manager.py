@@ -282,6 +282,29 @@ class ConversationCompactor:
             # Fallback: create a basic mechanical summary
             return self._fallback_summary(old_msgs)
 
+    async def _generate_summary_async(self, old_msgs: list[BaseMessage]) -> str:
+        """Use the LLM to generate a structured summary of old messages asynchronously."""
+        # Format old messages as readable text for the summarizer
+        conversation_text = self._format_messages_for_summary(old_msgs)
+
+        prompt = COMPACTION_PROMPT.format(
+            max_tokens=self.summary_max_tokens,
+            conversation=conversation_text,
+        )
+
+        try:
+            response = await self.llm.ainvoke([HumanMessage(content=prompt)])
+            summary = response.content
+            logger.info(
+                f"Compaction summary generated: "
+                f"~{len(summary)} chars from {len(old_msgs)} messages"
+            )
+            return summary
+        except Exception as e:
+            logger.error(f"Failed to generate compaction summary: {e}")
+            # Fallback: create a basic mechanical summary
+            return self._fallback_summary(old_msgs)
+
     def _format_messages_for_summary(self, messages: list[BaseMessage]) -> str:
         """Format messages into readable text for the summarizer."""
         lines = []
@@ -367,3 +390,104 @@ class ConversationCompactor:
             )
             return self.compact(messages)
         return messages
+
+
+# ---------------------------------------------------------------------------
+# Agent Middleware Integration (compatible with create_agent)
+# ---------------------------------------------------------------------------
+import copy
+from langchain.agents.middleware.types import AgentMiddleware
+from langchain_core.messages import RemoveMessage
+
+class ConversationCompactorMiddleware(AgentMiddleware):
+    """LangGraph/AgentBase middleware that manages conversation length using before_model hook.
+
+    This ensures old messages are compacted and physically removed from the
+    agent's graph state, preventing context window limits and reducing checkpointer state size.
+    """
+    def __init__(self, compactor: ConversationCompactor):
+        super().__init__()
+        self.compactor = compactor
+        logger.info("ConversationCompactorMiddleware initialized!")
+
+    def before_model(self, state, runtime) -> dict[str, Any] | None:
+        messages = state.get("messages", [])
+        if self.compactor.should_compact(messages):
+            logger.info("🔄 (Sync) Context window approaching limit — compacting conversation via Middleware before_model...")
+            
+            system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
+            conv_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
+            
+            recent_start = self.compactor._find_split_point(conv_msgs)
+            old_msgs = conv_msgs[:recent_start]
+            recent_msgs = conv_msgs[recent_start:]
+            
+            if not old_msgs:
+                return None
+                
+            summary_text = self.compactor._generate_summary(old_msgs)
+            self.compactor._persist_summary(summary_text)
+            
+            summary_msg = HumanMessage(
+                content=(
+                    f"[CONVERSATION SUMMARY — earlier messages have been compacted]\n\n"
+                    f"{summary_text}\n\n"
+                    f"[END OF SUMMARY — conversation continues below]"
+                )
+            )
+            
+            # Helper to copy message and strip ID to ensure correct append order in graph state
+            def clean_msg(msg):
+                msg_copy = copy.copy(msg)
+                msg_copy.id = None
+                return msg_copy
+                
+            clean_sys = [clean_msg(m) for m in system_msgs]
+            clean_recent = [clean_msg(m) for m in recent_msgs]
+            
+            # Remove all and rebuild to ensure exact order
+            all_removals = [RemoveMessage(id=m.id) for m in messages if getattr(m, "id", None)]
+            
+            return {"messages": all_removals + clean_sys + [summary_msg] + clean_recent}
+        return None
+
+    async def abefore_model(self, state, runtime) -> dict[str, Any] | None:
+        messages = state.get("messages", [])
+        if self.compactor.should_compact(messages):
+            logger.info("🔄 (Async) Context window approaching limit — compacting conversation via Middleware abefore_model...")
+            
+            system_msgs = [m for m in messages if isinstance(m, SystemMessage)]
+            conv_msgs = [m for m in messages if not isinstance(m, SystemMessage)]
+            
+            recent_start = self.compactor._find_split_point(conv_msgs)
+            old_msgs = conv_msgs[:recent_start]
+            recent_msgs = conv_msgs[recent_start:]
+            
+            if not old_msgs:
+                return None
+                
+            summary_text = await self.compactor._generate_summary_async(old_msgs)
+            self.compactor._persist_summary(summary_text)
+            
+            summary_msg = HumanMessage(
+                content=(
+                    f"[CONVERSATION SUMMARY — earlier messages have been compacted]\n\n"
+                    f"{summary_text}\n\n"
+                    f"[END OF SUMMARY — conversation continues below]"
+                )
+            )
+            
+            # Helper to copy message and strip ID to ensure correct append order in graph state
+            def clean_msg(msg):
+                msg_copy = copy.copy(msg)
+                msg_copy.id = None
+                return msg_copy
+                
+            clean_sys = [clean_msg(m) for m in system_msgs]
+            clean_recent = [clean_msg(m) for m in recent_msgs]
+            
+            # Remove all and rebuild to ensure exact order
+            all_removals = [RemoveMessage(id=m.id) for m in messages if getattr(m, "id", None)]
+            
+            return {"messages": all_removals + clean_sys + [summary_msg] + clean_recent}
+        return None
