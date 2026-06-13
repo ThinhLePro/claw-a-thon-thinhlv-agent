@@ -36,10 +36,10 @@ RECENT_TOKENS_BUDGET = 30_000    # Keep this many tokens of recent messages raw
 SUMMARY_MAX_TOKENS = 4_000       # Max tokens allocated for the summary itself
 
 # ---------------------------------------------------------------------------
-# Compaction Summary Prompt — specialised for DC network engineering context
+# Compaction Summary Prompt — specialised for network engineering context
 # ---------------------------------------------------------------------------
 COMPACTION_PROMPT = """\
-You are summarizing a conversation between a user and a Senior DC Network Engineer AI agent.
+You are summarizing a conversation between a user and a Network Engineer AI agent.
 Your goal is to create a concise but **comprehensive working memory** that will replace the older messages.
 The AI will use ONLY this summary (plus the recent messages that follow) to continue the conversation.
 

@@ -1,4 +1,4 @@
-"""Telegram Bot Integration for DC Network Engineer Agent.
+"""Telegram Bot Integration for Network Engineer Agent.
 
 Runs Telegram bot polling in a background thread alongside the
 HTTP server. Handles /start, /help commands and text messages.
@@ -34,8 +34,8 @@ def start_telegram_bot(process_message_fn, bot_token: str):
     async def cmd_start(update: Update, context) -> None:
         """Handle /start command."""
         welcome = (
-            "🔧 *DC Network Engineer Bot*\n\n"
-            "Xin chào! Tôi là Senior DC Network Engineer AI.\n"
+            "🔧 *Network Engineer Bot*\n\n"
+            "Xin chào! Tôi là Network Engineer AI.\n"
             "Hãy hỏi tôi bất kỳ câu hỏi nào về:\n\n"
             "• EVPN-VXLAN & IP Fabric\n"
             "• Juniper Junos CLI\n"

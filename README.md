@@ -1,4 +1,4 @@
-# DC Network Engineer — AI Agent + MCP Gateway
+# Network Engineer — AI Agent + MCP Gateway
 
 An autonomous AI network engineer agent powered by LangChain/LangGraph, deployed on **GreenNode AgentBase** platform, with a local **MCP (Model Context Protocol) server** providing real-time access to Juniper datacenter devices via NETCONF.
 
@@ -11,23 +11,23 @@ An autonomous AI network engineer agent powered by LangChain/LangGraph, deployed
 │                           GreenNode Cloud Platform                              │
 │                                                                                 │
 │  ┌───────────────────────────────────────────────────────────┐                  │
-│  │  DC Network Engineer Agent (dc-network-engineer-agent/)   │                  │
+│  │  Network Engineer Agent (dc-network-engineer-agent/)      │                  │
 │  │  ┌──────────────────────────────────────────────────────┐ │                  │
 │  │  │  main.py ── LangChain Agent + Memory + Planning      │ │                  │
-│  │  │  ├── system_prompt.py   (Senior Network Engineer)    │ │                  │
+│  │  │  ├── system_prompt.py   (Network Engineer)                  │ │                  │
 │  │  │  ├── mcp_client.py      (Auto-discover MCP tools)   │ │                  │
 │  │  │  ├── telegram_bot.py    (Telegram integration)       │ │                  │
 │  │  │  └── markdown_converter.py (MD → Telegram HTML)      │ │                  │
 │  │  └──────────────────────────────────────────────────────┘ │                  │
-│  │  Public IP: 61.28.236.0/24 (floating, not fixed)          │                  │
+│  │  Public IP: IP Public Range (floating, not fixed)         │                  │
 │  └──────────────────────┬────────────────────────────────────┘                  │
 │                         │ MCP over SSE (HTTP)                                   │
 └─────────────────────────┼───────────────────────────────────────────────────────┘
                           │
                           ▼
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│  SRX1500 Firewall (LAB_2BW11.18_SRX1500.STF.GW-N0)                            │
-│  Static NAT: 49.213.77.221 (public) ──► 192.168.100.181 (LAN)                 │
+│  Firewall Device (firewall-gateway)                                           │
+│  Static NAT: IP Public (public) ──► IP LAN (LAN)                              │
 └─────────────────────────┬───────────────────────────────────────────────────────┘
                           │
                           ▼
@@ -40,18 +40,18 @@ An autonomous AI network engineer agent powered by LangChain/LangGraph, deployed
 │  │  ├── Port: 8000/SSE                                       │                  │
 │  │  └── Loads: shared/devices.json                           │                  │
 │  └──────────────────────┬────────────────────────────────────┘                  │
-│  IP LAN: 192.168.100.181 │ 10.116.0.181                                        │
+│  IP LAN: IP LAN │ IP Lab                                                             │
 │                          │ NETCONF (SSH/830)                                    │
 │                          ▼                                                      │
 │  ┌───────────────────────────────────────────────────────────┐                  │
-│  │  Lab Network Devices (10.116.0.0/22)                      │                  │
-│  │  ├── LAB-QFX10K8-GW-01      (QFX10008, DC Gateway)       │                  │
-│  │  ├── LAB-EX4400-01-VNPT     (EX4400, VNPT Access)        │                  │
-│  │  ├── LAB-EX4400-TOR         (EX4400, ToR Switch)          │                  │
-│  │  ├── QFX5120-32C_STL.GW.01  (Core Leaf 01)               │                  │
-│  │  ├── QFX5120-32C_STL.GW.02  (Core Leaf 02)               │                  │
-│  │  ├── QFX5120-48Y_STL.GW.01  (Core Spine 01)              │                  │
-│  │  └── SRX1500.STF.GW-N0      (Firewall Gateway)           │                  │
+│  │  Lab Network Devices (IP LAN range)                       │                  │
+│  │  ├── network-gateway-01     (QFX10008, DC Gateway)       │                  │
+│  │  ├── vnpt-access-switch-01  (EX4400, VNPT Access)        │                  │
+│  │  ├── tor-access-switch-01   (EX4400, ToR Switch)          │                  │
+│  │  ├── core-leaf-01           (Core Leaf 01)               │                  │
+│  │  ├── core-leaf-02           (Core Leaf 02)               │                  │
+│  │  ├── core-spine-01          (Core Spine 01)              │                  │
+│  │  └── firewall-gateway-01    (Firewall Gateway)           │                  │
 │  └───────────────────────────────────────────────────────────┘                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -59,24 +59,24 @@ An autonomous AI network engineer agent powered by LangChain/LangGraph, deployed
 ### Network Flow
 
 ```
-Agent (GreenNode Cloud, 61.28.236.0/24)
+Agent (GreenNode Cloud, IP Public Range)
   │
-  │  HTTP/SSE ──► 49.213.77.221:8000
-  │
-  ▼
-SRX1500 Firewall
-  │  Static NAT: 49.213.77.221 ──► 192.168.100.181
+  │  HTTP/SSE ──► IP Public:8000
   │
   ▼
-MCP Server (192.168.100.181 / 10.116.0.181)
+Firewall Device
+  │  Static NAT: IP Public ──► IP LAN
+  │
+  ▼
+MCP Server (IP LAN / IP Lab)
   │
   │  NETCONF (SSH port 830 or 22)
   │
   ▼
-Lab Network Devices (10.116.0.0/22)
+Lab Network Devices (IP LAN range)
 ```
 
-> **Note:** Agent public IP is from the range `61.28.236.0/24` but uses a floating IP, so the exact IP is not fixed. Firewall rules on SRX1500 should allow this range.
+> **Note:** Agent public IP is from the range `IP Public Range` but uses a floating IP, so the exact IP is not fixed. Firewall rules on the firewall device should allow this range.
 
 ---
 
@@ -92,7 +92,7 @@ claw-a-thon-thinhlv-agent/
 │
 ├── dc-network-engineer-agent/         # 🤖 Agent — deploys to GreenNode
 │   ├── main.py                        # Entry point: agent + HTTP server
-│   ├── system_prompt.py               # Senior Network Engineer system prompt
+│   ├── system_prompt.py               # Network Engineer system prompt
 │   ├── mcp_client.py                  # Auto-discover MCP tools from server
 │   ├── telegram_bot.py                # Telegram bot integration
 │   ├── markdown_converter.py          # Markdown → Telegram HTML converter
@@ -178,9 +178,9 @@ docker compose up --build
 
 ## Skills Reference
 
-### DC Network Engineer Skills (`dc-network-engineer-skills/`)
+### Network Engineer Skills (`dc-network-engineer-skills/`)
 
-Domain knowledge that turns the AI agent into a **Senior Network Engineer**. Covers: physical DC infrastructure, cabling, TCP/IP, internet routing, Juniper expertise (EVPN-VXLAN, SRX, MC-LAG), and operational workflows. See [dc-network-engineer-skills/README.md](dc-network-engineer-skills/README.md) for details.
+Domain knowledge that turns the AI agent into a **Network Engineer**. Covers: physical DC infrastructure, cabling, TCP/IP, internet routing, Juniper expertise (EVPN-VXLAN, SRX, MC-LAG), and operational workflows. See [dc-network-engineer-skills/README.md](dc-network-engineer-skills/README.md) for details.
 
 ### GreenNode AgentBase Skills (`greennode-agentbase-skills/`)
 
@@ -210,10 +210,73 @@ The agent auto-discovers tools from the MCP server at startup. Currently availab
 
 ---
 
+## Jira Integration & Task Lifecycle
+
+The agent is integrated with the team's Jira Kanban board (Project **KAN**). It automatically tracks, logs, and updates operational tasks to maintain transparency and SLA compliance.
+
+### Jira Tools
+The agent uses the following custom tools to interact with Jira REST API v3:
+- `create_jira_task(summary, description)`: Creates a new Task on the KAN board and returns the Issue Key (e.g., `KAN-15`).
+- `update_task_status(issue_key, target_status)`: Transition task state to: `IN_PROGRESS`, `WAITING`, `ERROR`, or `DONE`.
+- `add_task_comment(issue_key, comment_body)`: Appends updates, CLI logs, diffs, or troubleshooting reports to the ticket.
+
+### Workflow Protocol
+Each request received by the agent is classified into two categories:
+
+1. **Category A: Direct Response (No Ticket)**
+   - Knowledge queries / explanations (e.g., "What is BGP community?", explaining EVPN).
+   - Simple read-only operations (e.g., `show interfaces`, checking BGP neighbor status).
+   - Casual conversation or confirmation.
+   
+2. **Category B: Mandatory Jira Ticket**
+   - **Configuration Changes**: Adding/modifying/deleting VLANs, interfaces, firewalls, routing policy, BGP peers.
+   - **Incident Resolution**: Interface down, BGP flapping, packet loss, high latency.
+   - **Customer Requests**: Circuit provisioning, IP assignment, port opening, bandwidth changes.
+   - **Maintenance & Planning**: Upgrades, backups, capacity analysis, config audits.
+
+### Lifecycle Transition States
+```
+[Start] -> create_jira_task -> [KAN-XX (Status: TODO)]
+                                      │
+                                      ▼
+                             update_task_status
+                                      │
+              ┌───────────────────────┴───────────────────────┐
+              ▼                                               ▼
+      [IN_PROGRESS] ──► (Run Ops/CLI/Config) ──► (Create Diff / Review Needed)
+              │                                               │
+              │                                               ▼
+              │                                      update_task_status
+              │                                               │
+              │                                               ▼
+              │                                           [WAITING]
+              │                                               │
+              │                                               ▼
+              │                                        (User Approves)
+              │                                               │
+              ├───────────────────────────────────────────────┘
+              ▼
+      add_task_comment (Post outputs/reports)
+              │
+              ├────────────────────────┬──────────────────────┐
+              ▼                        ▼                      ▼
+      update_task_status       update_task_status      (More steps)
+              │                        │                      │
+              ▼                        ▼                      ▼
+           [DONE]                   [ERROR]             [IN_PROGRESS]
+```
+
+- **IN_PROGRESS**: Transitioned immediately before starting work.
+- **WAITING**: Transitioned when waiting for user approval (e.g., showing a config diff before committing changes).
+- **ERROR**: Transitioned if tools fail or unexpected errors occur, appending error details.
+- **DONE**: Transitioned upon successful completion, appending a final summary report.
+
+---
+
 ## Security Notes
 
 - **Never commit `.env` files** — they contain secrets (API keys, passwords, tokens)
 - NETCONF credentials are stored in `mcp-server/.env`, not in source code
 - Agent credentials (LLM keys, Telegram token) are in `dc-network-engineer-agent/.env`
 - GreenNode deployment credentials are in `.greennode.json` (gitignored)
-- The SRX1500 firewall should whitelist the GreenNode agent IP range (`61.28.236.0/24`)
+- The firewall device should whitelist the GreenNode agent IP range (`IP Public Range`)

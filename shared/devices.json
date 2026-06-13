@@ -1,56 +1,56 @@
 {
   "devices": {
-    "LAB-QFX10K8-GW-01": {
-      "name": "LAB-QFX10K8-GW-01",
-      "ip": "10.116.0.64",
+    "network-gateway-01": {
+      "name": "network-gateway-01",
+      "ip": "10.0.0.1",
       "port": 830,
       "model": "QFX10008",
       "role": "Datacenter Gateway",
       "status": "Online"
     },
-    "LAB_2BW11.18_SRX1500.STF.GW-N0": {
-      "name": "LAB_2BW11.18_SRX1500.STF.GW-N0",
-      "ip": "10.116.0.96",
+    "firewall-gateway-01": {
+      "name": "firewall-gateway-01",
+      "ip": "10.0.0.2",
       "port": 22,
       "model": "SRX1500",
       "role": "Firewall Gateway",
       "status": "Online"
     },
-    "LAB-EX4400-01-VNPT": {
-      "name": "LAB-EX4400-01-VNPT",
-      "ip": "10.116.0.54",
+    "vnpt-access-switch-01": {
+      "name": "vnpt-access-switch-01",
+      "ip": "10.0.0.3",
       "port": 830,
       "model": "EX4400-48T",
       "role": "VNPT Access Switch",
       "status": "Online"
     },
-    "LAB-EX4400-TOR": {
-      "name": "LAB-EX4400-TOR",
-      "ip": "10.116.0.158",
+    "tor-access-switch-01": {
+      "name": "tor-access-switch-01",
+      "ip": "10.0.0.4",
       "port": 830,
       "model": "EX4400-48T",
       "role": "ToR Access Switch",
       "status": "Online"
     },
-    "LAB_2BW11.12_QFX5120-32C_STL.GW.02": {
-      "name": "LAB_2BW11.12_QFX5120-32C_STL.GW.02",
-      "ip": "10.116.1.99",
+    "core-leaf-02": {
+      "name": "core-leaf-02",
+      "ip": "10.0.1.2",
       "port": 830,
       "model": "QFX5120-32C",
       "role": "Core Leaf 02",
       "status": "Online"
     },
-    "LAB_2BW11.11_QFX5120-32C_STL.GW.01": {
-      "name": "LAB_2BW11.11_QFX5120-32C_STL.GW.01",
-      "ip": "10.116.1.98",
+    "core-leaf-01": {
+      "name": "core-leaf-01",
+      "ip": "10.0.1.1",
       "port": 22,
       "model": "QFX5120-32C",
       "role": "Core Leaf 01",
       "status": "Online"
     },
-    "LAB_2BW11.9_QFX5120-48Y_STL.GW.01": {
-      "name": "LAB_2BW11.9_QFX5120-48Y_STL.GW.01",
-      "ip": "10.116.1.150",
+    "core-spine-01": {
+      "name": "core-spine-01",
+      "ip": "10.0.1.10",
       "port": 22,
       "model": "QFX5120-48Y-8C",
       "role": "Core Spine 01",

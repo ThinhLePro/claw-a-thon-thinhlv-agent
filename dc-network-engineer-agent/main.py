@@ -1,4 +1,4 @@
-"""DC Network Engineer Agent — Main Entry Point.
+"""Network Engineer Agent — Main Entry Point.
 
 Orchestrates:
 - LLM + LangChain agent with memory & planning tools
@@ -31,6 +31,7 @@ from langgraph.config import get_config
 from system_prompt import SYSTEM_PROMPT
 from mcp_client import discover_mcp_tools
 from agent_tools import read_file, write_file, list_workspace_files, http_request
+from jira_tools import create_jira_task, update_task_status, add_task_comment
 from context_manager import ConversationCompactor, ConversationCompactorMiddleware
 
 load_dotenv()
@@ -90,7 +91,7 @@ compactor = ConversationCompactor(
 compactor_middleware = ConversationCompactorMiddleware(compactor)
 
 # --- MCP Server Configuration ---
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://49.213.77.221:8000/sse")
+MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://localhost:8000/sse")
 
 
 # --- Long-Term Memory Tools ---
@@ -208,6 +209,10 @@ agent = create_agent(
         write_file,
         list_workspace_files,
         http_request,
+        # Jira Task Management tools
+        create_jira_task,
+        update_task_status,
+        add_task_comment,
         # MCP Device tools (auto-discovered)
         *mcp_tools,
     ],

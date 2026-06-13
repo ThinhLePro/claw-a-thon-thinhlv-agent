@@ -1,7 +1,7 @@
 services:
   # ============================================
   # MCP Server — Juniper NETCONF Gateway
-  # Runs on local/on-prem machine with access to lab network (10.116.0.0/22)
+  # Runs on local/on-prem machine with access to lab network (IP LAN range)
   # ============================================
   mcp-server:
     build: ./mcp-server

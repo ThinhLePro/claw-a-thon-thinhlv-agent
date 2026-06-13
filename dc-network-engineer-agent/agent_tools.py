@@ -1,4 +1,4 @@
-"""Additional execution tools for the DC Network Engineer Agent.
+"""Additional execution tools for the Network Engineer Agent.
 
 These tools extend the agent's capabilities beyond LLM reasoning and MCP device tools.
 Phase 3: File I/O + HTTP Client (runs inside agent container).

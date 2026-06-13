@@ -620,7 +620,7 @@ def get_interface_diagnostics(device_name: str, interface_name: str) -> str:
 def execute_shell(command: str, timeout: int = 30, working_directory: str = "/tmp") -> str:
     """Execute a shell command on the MCP Gateway Linux server.
 
-    This server has direct network access to the lab (10.116.0.0/22).
+    This server has direct network access to the lab (IP LAN range).
     Use this for network diagnostics, running scripts, or system operations.
 
     Common use cases:
@@ -672,7 +672,7 @@ def write_and_run_script(
     """Write a Python script to disk and execute it on the MCP Gateway server.
 
     Use this to run complex network automation scripts that need:
-    - Direct access to lab devices (10.116.0.0/22)
+    - Direct access to lab devices (IP LAN range)
     - Python libraries available on the server
     - Multi-step logic that can't be done in a single shell command
 
