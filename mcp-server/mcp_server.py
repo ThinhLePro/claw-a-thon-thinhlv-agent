@@ -1,6 +1,9 @@
 import os
 import json
 import logging
+import hashlib
+import hmac
+import sqlite3
 import httpx
 from typing import Optional
 from mcp.server.fastmcp import FastMCP
@@ -18,10 +21,25 @@ NETCONF_USER = os.environ.get("NETCONF_USER", "network-agent")
 NETCONF_PASSWORD = os.environ.get("NETCONF_PASSWORD", "")
 MCP_PORT = int(os.environ.get("MCP_PORT", "8000"))
 DEVICES_FILE = os.environ.get("DEVICES_FILE", "/app/shared/devices.json")
+COMMAND_TIMEOUT = int(os.environ.get("COMMAND_TIMEOUT", "60"))
 
 # Monitoring configurations (Prometheus & Loki)
 PROMETHEUS_URL = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090")
 LOKI_URL = os.environ.get("LOKI_URL", "http://loki:3100")
+
+# Jira configuration (for propose_network_change and webhook)
+JIRA_BASE_URL = os.environ.get("JIRA_BASE_URL", "").rstrip("/")
+JIRA_USER_EMAIL = os.environ.get("JIRA_USER_EMAIL", "")
+JIRA_API_TOKEN = os.environ.get("JIRA_API_TOKEN", "")
+JIRA_PROJECT_KEY = os.environ.get("JIRA_PROJECT_KEY", "KAN")
+JIRA_WEBHOOK_SECRET = os.environ.get("JIRA_WEBHOOK_SECRET", "")
+
+# Command database paths
+OPERATION_COMMANDS_DB = os.environ.get("OPERATION_COMMANDS_DB", "/app/db/operation_commands.db")
+CONFIG_STATEMENTS_DB = os.environ.get("CONFIG_STATEMENTS_DB", "/app/db/configuration_statements.db")
+
+# Knowledge base (future RAG server)
+KNOWLEDGE_BASE_URL = os.environ.get("KNOWLEDGE_BASE_URL", "http://internal-knowledge-base.noc.local")
 
 if not NETCONF_PASSWORD:
     raise ValueError(
@@ -29,11 +47,16 @@ if not NETCONF_PASSWORD:
         "Set it in your .env file or pass via docker-compose."
     )
 
+# --- Import Command ACL ---
+from command_acl import CommandACL, validate_command
+
+acl = CommandACL()
+
 # --- Load device inventory from shared JSON file ---
 def load_device_map(filepath: str) -> dict:
     """Load device inventory from a JSON file.
 
-    Returns a dict of {device_name: {ip, port, model}} suitable for NETCONF connections.
+    Returns a dict of {device_name: {ip, port, model, vendor, connection_method}} suitable for connections.
     """
     logger.info(f"Loading device inventory from {filepath}...")
     with open(filepath, "r") as f:
@@ -46,6 +69,8 @@ def load_device_map(filepath: str) -> dict:
             "ip": info["ip"],
             "port": info.get("port", 830),
             "model": info.get("model", "Unknown"),
+            "vendor": info.get("vendor", "juniper").lower(),
+            "connection_method": info.get("connection_method", "netconf").lower(),
         }
     logger.info(f"Loaded {len(device_map)} devices from {filepath}")
     return device_map
@@ -55,14 +80,28 @@ import threading
 import time
 import subprocess
 import shlex
+import requests as req_lib
 
 DEVICE_MAP = load_device_map(DEVICES_FILE)
 
 
+# ---------------------------------------------------------------------------
+# Multi-vendor connection support: NETCONF (default) → SSH → API fallback
+# ---------------------------------------------------------------------------
 def connect_device(device_name: str) -> Device:
-    """Resolve and open a connection to the specified Junos device."""
+    """Resolve and open a connection to the specified device.
+
+    Supports multi-vendor, multi-method connections:
+    - NETCONF (default for Juniper devices)
+    - SSH fallback (for devices that don't support NETCONF)
+    - API fallback (future support)
+
+    Currently returns a Junos Device for NETCONF connections.
+    For SSH/API, raises NotImplementedError with guidance.
+    """
     # Resolve device_name (by hostname or IP)
     device_info = None
+    resolved_name = device_name
     if device_name in DEVICE_MAP:
         device_info = DEVICE_MAP[device_name]
     else:
@@ -70,6 +109,7 @@ def connect_device(device_name: str) -> Device:
         for hostname, info in DEVICE_MAP.items():
             if info["ip"] == device_name:
                 device_info = info
+                resolved_name = hostname
                 break
 
     if not device_info:
@@ -77,18 +117,128 @@ def connect_device(device_name: str) -> Device:
 
     ip = device_info["ip"]
     port = device_info["port"]
+    vendor = device_info.get("vendor", "juniper")
+    connection_method = device_info.get("connection_method", "netconf")
 
-    logger.info(f"Connecting to device {device_name} ({ip}:{port}) via Netconf...")
-    dev = Device(
-        host=ip,
-        user=NETCONF_USER,
-        passwd=NETCONF_PASSWORD,
-        port=port,
-        huge_tree=True,
-        conn_open_timeout=15
-    )
-    dev.open()
-    return dev
+    logger.info(f"Connecting to device {resolved_name} ({ip}:{port}) via {connection_method} [vendor: {vendor}]...")
+
+    if connection_method == "netconf":
+        dev = Device(
+            host=ip,
+            user=NETCONF_USER,
+            passwd=NETCONF_PASSWORD,
+            port=port,
+            huge_tree=True,
+            conn_open_timeout=15
+        )
+        dev.open()
+        return dev
+    elif connection_method == "ssh":
+        # SSH fallback — uses Netmiko for multi-vendor CLI access
+        try:
+            from netmiko import ConnectHandler
+        except ImportError:
+            raise RuntimeError("Netmiko is required for SSH connections. Install with: pip install netmiko")
+
+        # Map vendor names to Netmiko device_type
+        vendor_netmiko_map = {
+            "juniper": "juniper_junos",
+            "cisco": "cisco_ios",
+            "arista": "arista_eos",
+            "huawei": "huawei",
+        }
+        device_type = vendor_netmiko_map.get(vendor, f"{vendor}_ssh")
+
+        net_connect = ConnectHandler(
+            device_type=device_type,
+            host=ip,
+            username=NETCONF_USER,
+            password=NETCONF_PASSWORD,
+            port=port,
+            timeout=15,
+        )
+        return net_connect
+    elif connection_method == "api":
+        raise NotImplementedError(
+            f"API connection method is not yet implemented for {resolved_name}. "
+            f"Please configure the device to use 'netconf' or 'ssh' connection method."
+        )
+    else:
+        raise ValueError(f"Unknown connection method '{connection_method}' for device '{resolved_name}'.")
+
+
+def execute_command_on_device(device_name: str, command: str, timeout: int = None) -> str:
+    """Execute a read-only command on a device using the appropriate method.
+
+    Handles multi-vendor connections:
+    - NETCONF (Juniper): Uses PyEZ RPC cli()
+    - SSH (multi-vendor): Uses Netmiko send_command()
+    - API: Future implementation
+
+    Args:
+        device_name: Device hostname or IP.
+        command: CLI command to execute.
+        timeout: Command execution timeout in seconds.
+
+    Returns:
+        Command output as string.
+    """
+    if timeout is None:
+        timeout = COMMAND_TIMEOUT
+
+    device_info = _resolve_device_info(device_name)
+    connection_method = device_info.get("connection_method", "netconf")
+
+    if connection_method == "netconf":
+        dev = pool.get(device_name)
+        res = dev.rpc.cli(command, format='text')
+        content = res.text if res.text else res.findtext('cli-out')
+        if not content and isinstance(res, etree._Element):
+            content = etree.tostring(res, pretty_print=True, encoding='utf-8').decode('utf-8')
+        return content or f"No output returned by command '{command}' on {device_name}."
+
+    elif connection_method == "ssh":
+        from netmiko import ConnectHandler
+
+        device_info_full = _resolve_device_info(device_name)
+        vendor = device_info_full.get("vendor", "juniper")
+        vendor_netmiko_map = {
+            "juniper": "juniper_junos",
+            "cisco": "cisco_ios",
+            "arista": "arista_eos",
+            "huawei": "huawei",
+        }
+        device_type = vendor_netmiko_map.get(vendor, f"{vendor}_ssh")
+
+        try:
+            net_connect = ConnectHandler(
+                device_type=device_type,
+                host=device_info_full["ip"],
+                username=NETCONF_USER,
+                password=NETCONF_PASSWORD,
+                port=device_info_full["port"],
+                timeout=timeout,
+            )
+            output = net_connect.send_command(command, read_timeout=timeout)
+            net_connect.disconnect()
+            return output or f"No output returned by command '{command}' on {device_name}."
+        except Exception as e:
+            return f"Error executing SSH command '{command}' on '{device_name}': {e}"
+
+    elif connection_method == "api":
+        return f"API connection method is not yet implemented for device '{device_name}'."
+    else:
+        return f"Unknown connection method '{connection_method}' for device '{device_name}'."
+
+
+def _resolve_device_info(device_name: str) -> dict:
+    """Resolve device info from DEVICE_MAP by hostname or IP."""
+    if device_name in DEVICE_MAP:
+        return DEVICE_MAP[device_name]
+    for hostname, info in DEVICE_MAP.items():
+        if info["ip"] == device_name:
+            return info
+    raise ValueError(f"Device '{device_name}' is not registered in the database.")
 
 
 class DeviceConnectionPool:
@@ -106,7 +256,7 @@ class DeviceConnectionPool:
     def get(self, device_name: str) -> Device:
         """Get a connected device from pool, or create new connection."""
         resolved_name = self._resolve_hostname(device_name)
-        
+
         with self._lock:
             if resolved_name in self._pool:
                 dev, _ = self._pool[resolved_name]
@@ -191,18 +341,24 @@ mcp = FastMCP(
     transport_security=ts
 )
 
+# ===================================================================
+# DEVICE INVENTORY TOOLS
+# ===================================================================
+
 @mcp.tool()
 def get_devices_list() -> str:
     """Get the list of all registered datacenter devices and their static profile.
 
     Returns:
-        A formatted list of device names, IP addresses, models, and Netconf ports.
+        A formatted list of device names, IP addresses, models, vendors, connection methods, and Netconf ports.
     """
     logger.info("Executing tool: get_devices_list")
     result = ["Registered Datacenter Devices:"]
     for d_name, d_info in DEVICE_MAP.items():
         result.append(
-            f"- Hostname: {d_name} | IP: {d_info.get('ip')} | Model: {d_info.get('model')} | Port: {d_info.get('port')}"
+            f"- Hostname: {d_name} | IP: {d_info.get('ip')} | Model: {d_info.get('model')} "
+            f"| Vendor: {d_info.get('vendor', 'juniper')} | Method: {d_info.get('connection_method', 'netconf')} "
+            f"| Port: {d_info.get('port')}"
         )
     return "\n".join(result)
 
@@ -225,6 +381,8 @@ def reload_devices() -> str:
         return f"Reloaded successfully. {len(DEVICE_MAP)} devices: {names}"
     except Exception as e:
         return f"Error reloading devices: {e}"
+
+
 @mcp.tool()
 def get_device_detail(device_name: str) -> str:
     """Get the live detailed facts and system specifications of a specific device.
@@ -331,6 +489,58 @@ def get_device_configuration_detail(device_name: str, config_type: str = "active
         logger.error(f"Failed to get configuration detail: {e}")
         return f"Error retrieving config from device '{device_name}': {e}"
 
+
+# ===================================================================
+# TOOL 1: view_network_status (Fast-Track — Read-only with Command ACL)
+# Replaces get_device_operation_detail with ACL enforcement
+# ===================================================================
+
+@mcp.tool()
+def view_network_status(device_ip: str, command: str) -> str:
+    """Execute a read-only operational command on a network device (Fast-Track).
+
+    This tool is for gathering information and checking device status ONLY.
+    All commands pass through a Command ACL that only allows safe operational
+    commands (show, ping, traceroute, monitor). Configuration commands are
+    blocked and must go through propose_network_change.
+
+    Supports multi-vendor devices:
+    - NETCONF (default for Juniper)
+    - SSH fallback (for devices not supporting NETCONF)
+    - API (future support)
+
+    Args:
+        device_ip: IP address or hostname of the device.
+        command: The operational CLI command to execute (e.g., 'show interfaces terse', 'show bgp summary').
+    """
+    logger.info(f"Executing tool: view_network_status for {device_ip} (command: {command})")
+
+    # Step 1: Command ACL validation
+    allowed, acl_message = acl.validate(command)
+    if not allowed:
+        return f"❌ {acl_message}"
+
+    # Step 2: Execute command on device
+    try:
+        content = execute_command_on_device(device_ip, command, timeout=COMMAND_TIMEOUT)
+
+        # Truncate if too large
+        MAX_LEN = 100000
+        if len(content) > MAX_LEN:
+            truncated = content[:MAX_LEN]
+            return (
+                f"--- Operational State: {device_ip} [{command}] (Truncated) ---\n"
+                f"{truncated}\n\n"
+                f"... [TRUNCATED due to length ({len(content)} chars)]"
+            )
+
+        return f"--- Operational State: {device_ip} [{command}] ---\n{content}"
+    except Exception as e:
+        logger.error(f"Failed to execute operational query: {e}")
+        return f"Error executing command '{command}' on '{device_ip}': {e}"
+
+
+# Keep legacy name as an alias for backward compatibility
 @mcp.tool()
 def get_device_operation_list(device_name: str) -> str:
     """Get the suggested list of operational commands/queries supported by the device.
@@ -350,89 +560,376 @@ def get_device_operation_list(device_name: str) -> str:
     ]
     return f"Suggested Operational Commands for {device_name}:\n" + "\n".join(f"- {q}" for q in queries)
 
+
+# ===================================================================
+# TOOL 2: lookup_command_dictionary (Query internal command/config DB)
+# ===================================================================
+
 @mcp.tool()
-def get_device_operation_detail(device_name: str, query_type: str) -> str:
-    """Get the live operational command output of a device.
+def lookup_command_dictionary(
+    intent_keyword: str,
+    device_model: str = "",
+    device_vendor: str = "juniper",
+    os_version: str = "",
+) -> str:
+    """MANDATORY: Look up command syntax, parameters, and risk level from the internal
+    command database BEFORE generating any CLI command or configuration.
+
+    This tool queries two databases:
+    - operation_commands: For show/operational commands (3000+ Juniper, Cisco commands)
+    - configuration_statements: For config set/delete statements (8400+ Juniper statements)
+
+    Multi-vendor support: Juniper (primary), Cisco, Arista, Huawei.
 
     Args:
-        device_name: The name of the device or its IP address.
-        query_type: The operational CLI command to execute (e.g., 'show interfaces terse', 'show bgp summary').
+        intent_keyword: The purpose or keyword to search (e.g., "bgp status", "disable interface", "evpn vxlan vni").
+        device_model: Device model (e.g., "QFX10008", "MX480"). Optional, for context.
+        device_vendor: Device vendor (e.g., "juniper", "cisco", "arista"). Defaults to "juniper".
+        os_version: OS version of the device. Optional, for context.
     """
-    logger.info(f"Executing tool: get_device_operation_detail for {device_name} (command: {query_type})")
+    logger.info(f"Executing tool: lookup_command_dictionary for '{intent_keyword}' (vendor: {device_vendor}, model: {device_model})")
+
+    results = []
+    vendor_filter = device_vendor.lower().strip() if device_vendor else ""
+
+    # --- Search operation_commands DB ---
     try:
-        dev = pool.get(device_name)
+        conn_ops = sqlite3.connect(OPERATION_COMMANDS_DB)
+        cur_ops = conn_ops.cursor()
 
-        # Run CLI command RPC
-        res = dev.rpc.cli(query_type, format='text')
-        content = res.text if res.text else res.findtext('cli-out')
+        # FTS5 search for operational commands
+        fts_query = intent_keyword.replace('"', '""')
+        query_sql = """
+            SELECT oc.command_name, oc.short_desc, oc.syntax, oc.risk_level,
+                   oc.options, oc.output_fields, oc.url, oc.vendor
+            FROM operation_commands_fts fts
+            JOIN operation_commands oc ON fts.rowid = oc.id
+            WHERE operation_commands_fts MATCH ?
+        """
+        params = [fts_query]
 
-        # If it returned XML instead, serialize it
-        if not content and isinstance(res, etree._Element):
-            content = etree.tostring(res, pretty_print=True, encoding='utf-8').decode('utf-8')
+        if vendor_filter:
+            query_sql += " AND oc.vendor = ?"
+            params.append(vendor_filter)
 
-        if not content:
-            return f"No output returned by command '{query_type}' on {device_name}."
+        query_sql += " LIMIT 10"
 
-        # Truncate if too large
-        MAX_LEN = 100000
-        if len(content) > MAX_LEN:
-            truncated = content[:MAX_LEN]
+        cur_ops.execute(query_sql, params)
+        rows = cur_ops.fetchall()
+
+        if rows:
+            results.append("=== Operational Commands ===")
+            for row in rows:
+                cmd_name, short_desc, syntax, risk_level, options, output_fields, url, vendor = row
+                entry = [f"\n📋 Command: {cmd_name} [Vendor: {vendor}] [Risk: {risk_level or 'INFO'}]"]
+                if short_desc:
+                    entry.append(f"   Description: {short_desc[:300]}")
+                if syntax:
+                    entry.append(f"   Syntax: {syntax[:500]}")
+                if options:
+                    entry.append(f"   Options: {options[:400]}")
+                if url:
+                    entry.append(f"   Reference: {url}")
+                results.append("\n".join(entry))
+
+        conn_ops.close()
+    except Exception as e:
+        logger.error(f"Error querying operation_commands DB: {e}")
+        results.append(f"⚠️ Error querying operational commands DB: {e}")
+
+    # --- Search configuration_statements DB ---
+    try:
+        conn_cfg = sqlite3.connect(CONFIG_STATEMENTS_DB)
+        cur_cfg = conn_cfg.cursor()
+
+        # FTS5 search for configuration statements
+        fts_query = intent_keyword.replace('"', '""')
+        query_sql = """
+            SELECT cs.statement_name, cs.short_desc, cs.syntax, cs.description,
+                   cs.default_value, cs.options, cs.hierarchy_level,
+                   cs.required_privilege_level, cs.release_information, cs.url, cs.vendor
+            FROM config_statements_fts fts
+            JOIN config_statements cs ON fts.rowid = cs.id
+            WHERE config_statements_fts MATCH ?
+        """
+        params = [fts_query]
+
+        if vendor_filter:
+            query_sql += " AND cs.vendor = ?"
+            params.append(vendor_filter)
+
+        query_sql += " LIMIT 10"
+
+        cur_cfg.execute(query_sql, params)
+        rows = cur_cfg.fetchall()
+
+        if rows:
+            results.append("\n=== Configuration Statements ===")
+            for row in rows:
+                stmt_name, short_desc, syntax, description, default_val, options, hierarchy, privilege, release, url, vendor = row
+                entry = [f"\n🔧 Statement: {stmt_name} [Vendor: {vendor}]"]
+                if short_desc:
+                    entry.append(f"   Description: {short_desc[:300]}")
+                if syntax:
+                    entry.append(f"   Syntax: {syntax[:500]}")
+                if hierarchy:
+                    entry.append(f"   Hierarchy Level: {hierarchy[:300]}")
+                if default_val:
+                    entry.append(f"   Default: {default_val[:200]}")
+                if options:
+                    entry.append(f"   Options: {options[:400]}")
+                if privilege:
+                    entry.append(f"   Required Privilege: {privilege[:200]}")
+                if url:
+                    entry.append(f"   Reference: {url}")
+                results.append("\n".join(entry))
+
+        conn_cfg.close()
+    except Exception as e:
+        logger.error(f"Error querying config_statements DB: {e}")
+        results.append(f"⚠️ Error querying configuration statements DB: {e}")
+
+    if not results:
+        return (
+            f"No commands or configuration statements found matching '{intent_keyword}' "
+            f"for vendor '{device_vendor}'. Try broader keywords or check the vendor name."
+        )
+
+    header = f"--- Command Dictionary Results for '{intent_keyword}' ---"
+    if device_model:
+        header += f" (Model: {device_model})"
+    if device_vendor:
+        header += f" (Vendor: {device_vendor})"
+
+    return header + "\n" + "\n".join(results)
+
+
+# ===================================================================
+# TOOL 3: propose_network_change (Slow-Track — Creates Jira ticket)
+# ===================================================================
+
+def _text_to_adf(text: str) -> dict:
+    """Convert plain text to Atlassian Document Format (ADF) for Jira API v3."""
+    paragraphs = text.split("\n\n") if "\n\n" in text else [text]
+    doc_content = []
+    for para in paragraphs:
+        lines = para.split("\n")
+        inline_nodes = []
+        for i, line in enumerate(lines):
+            if line:
+                inline_nodes.append({"type": "text", "text": line})
+            if i < len(lines) - 1:
+                inline_nodes.append({"type": "hardBreak"})
+        if inline_nodes:
+            doc_content.append({"type": "paragraph", "content": inline_nodes})
+    return {
+        "version": 1,
+        "type": "doc",
+        "content": doc_content or [
+            {"type": "paragraph", "content": [{"type": "text", "text": "(empty)"}]}
+        ],
+    }
+
+
+@mcp.tool()
+def propose_network_change(
+    device_ip: str,
+    config_payload: str,
+    reason: str,
+) -> str:
+    """Propose a configuration change by creating a Jira Change Request ticket (Slow-Track).
+
+    This tool does NOT directly modify the device. Instead, it:
+    1. Creates a Jira ticket (Type: Change Request) with the proposed config.
+    2. Returns the Jira Issue Key (e.g., NOC-1024) to the agent.
+    3. Engineers review and approve the change on Jira.
+    4. Upon approval, the Jira webhook triggers the MCP Gateway to push the config.
+
+    For multi-device changes, create ONE ticket per device.
+
+    Args:
+        device_ip: IP address or hostname of the target device.
+        config_payload: The configuration commands to apply (set/delete commands or structured config block).
+        reason: AI-generated analysis explaining why this change is needed.
+    """
+    logger.info(f"Executing tool: propose_network_change for {device_ip}")
+
+    if not JIRA_BASE_URL or not JIRA_USER_EMAIL or not JIRA_API_TOKEN:
+        return "Error: Jira is not configured. Missing JIRA_BASE_URL, JIRA_USER_EMAIL, or JIRA_API_TOKEN."
+
+    # Resolve device name for context
+    device_display = device_ip
+    for hostname, info in DEVICE_MAP.items():
+        if info["ip"] == device_ip or hostname == device_ip:
+            device_display = f"{hostname} ({info['ip']})"
+            break
+
+    # Build Jira ticket
+    summary = f"[Network Change] {device_display}: {reason[:80]}"
+    description = (
+        f"🔧 Network Configuration Change Request\n\n"
+        f"📍 Device: {device_display}\n"
+        f"📋 Proposed by: AI Network Agent\n\n"
+        f"--- REASON ---\n"
+        f"{reason}\n\n"
+        f"--- CONFIGURATION PAYLOAD ---\n"
+        f"{config_payload}\n\n"
+        f"--- INSTRUCTIONS ---\n"
+        f"Review the proposed change above.\n"
+        f"Click 'Approve' to trigger automatic deployment via MCP Gateway.\n"
+        f"The MCP Gateway will: Backup → Lock → Load → Commit Check → Commit Confirmed 3 → Commit.\n"
+        f"If any step fails, changes will be automatically rolled back."
+    )
+
+    payload = {
+        "fields": {
+            "project": {"key": JIRA_PROJECT_KEY},
+            "summary": summary,
+            "description": _text_to_adf(description),
+            "issuetype": {"name": "Task"},
+        }
+    }
+
+    try:
+        url = f"{JIRA_BASE_URL}/rest/api/3/issue"
+        resp = req_lib.post(
+            url,
+            json=payload,
+            auth=(JIRA_USER_EMAIL, JIRA_API_TOKEN),
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            timeout=15,
+        )
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            issue_key = data.get("key", "UNKNOWN")
+            logger.info(f"Jira ticket created via propose_network_change: {issue_key}")
             return (
-                f"--- Operational State: {device_name} [{query_type}] (Truncated) ---\n"
-                f"{truncated}\n\n"
-                f"... [TRUNCATED due to length ({len(content)} chars)]"
+                f"✅ Change Request created successfully!\n"
+                f"📋 Jira Issue: **{issue_key}**\n"
+                f"🔗 Link: {JIRA_BASE_URL}/browse/{issue_key}\n"
+                f"📍 Device: {device_display}\n"
+                f"📝 Status: Pending Approval\n\n"
+                f"The engineering team will review and approve the change on Jira. "
+                f"Once approved, the MCP Gateway will automatically push the configuration."
             )
-
-        return f"--- Operational State: {device_name} [{query_type}] ---\n{content}"
+        else:
+            error_detail = resp.text[:800]
+            logger.error(f"Jira create failed: HTTP {resp.status_code} — {error_detail}")
+            return f"Error creating Jira ticket: HTTP {resp.status_code} — {error_detail}"
+    except req_lib.exceptions.Timeout:
+        return "Error: Jira API request timed out."
     except Exception as e:
-        logger.error(f"Failed to execute operational query: {e}")
-        return f"Error executing command '{query_type}' on '{device_name}': {e}"
+        logger.error(f"propose_network_change exception: {e}")
+        return f"Error creating change request: {e}"
+
+
+# ===================================================================
+# TOOL 4: query_knowledge_base (Stub — future RAG integration)
+# ===================================================================
 
 @mcp.tool()
-def edit_device_configuration(device_name: str, configuration_snippet: str, description: str = "") -> str:
-    """Safely apply and commit configuration changes to a device.
+def query_knowledge_base(
+    query: str,
+    filters: str = "",
+) -> str:
+    """Search the internal knowledge base for vendor documentation, best practices,
+    and troubleshooting guides BEFORE diagnosing issues or designing configurations.
+
+    The database contains 16,520 document chunks categorized into two main source types:
+
+    1. Juniper Knowledge Base (KB) Articles (source: "kb")
+       - Over 10,000+ indexed chunks of sanitized Juniper technical support articles.
+       - Troubleshooting Guides: Step-by-step procedures for handling hardware failures, traffic drops, and protocol flaps (e.g., BGP, OSPF, EVPN).
+       - Suggested Software Releases: Official guidance on stable Junos releases for evaluation (e.g., the recommended releases list in KB21476).
+       - Platform Coverage: Troubleshooting and configurations for SRX Series Firewalls, QFX Series Switches, MX Series Routers, and EX Series Switches.
+       - Symptom & Cause Analyses: Explanations of software bugs, physical transceiver issues, and hardware constraints.
+
+    2. Reference Books & Technical Guides (source: "book")
+       - Over 6,100+ indexed pages of detailed books and design manuals.
+       - Data Center & Switching Guides:
+         * Juniper QFX10000 Series: A Comprehensive Guide to Building Next-Generation Data Centers
+         * Juniper QFX5100 Series: A Comprehensive Guide to Building Next-Generation Networks
+       - Protocol & Design & Operation (DO) Manuals:
+         * Junos Design & Operation: Configuring Junos Policies & Filters
+         * Junos Design & Operation: EVPNs for Data Center Interconnect (DCI)
+         * Junos Design & Operation: Contrail DPDK
+         * EVPN-VXLAN Integration Guide
+         * Class of Service (CoS) on Security Devices
+       - Security & Virtualization:
+         * Junos Security
+         * Contrail Architecture Guide
+         * APS 6.4 User Guide
+
+    This tool performs Vector Similarity Search over the database to find the most relevant chunks.
 
     Args:
-        device_name: The name of the device or its IP address.
-        configuration_snippet: The configuration commands to apply (set commands or curly-braces config format).
-        description: A short description for the commit log.
+        query: The core question, keyword, or error code to look up (e.g., "RPD_BGP_NEIGHBOR_STATE_CHANGED", "optimize OSPF timers").
+        filters: Optional JSON string of metadata filters to narrow scope (e.g., '{"source": "kb"}' or '{"source": "book"}').
     """
-    logger.info(f"Executing tool: edit_device_configuration for {device_name}")
-    try:
-        dev = pool.get(device_name)
-        cu = Config(dev)
+    logger.info(f"Executing tool: query_knowledge_base for '{query}' (filters: {filters})")
 
-        # Determine format (set vs text)
-        is_set = any(line.strip().startswith(("set", "delete")) for line in configuration_snippet.split("\n"))
-        fmt = "set" if is_set else "text"
-
-        logger.info(f"Loading configuration (format: {fmt})...")
-
-        # Lock, load, check, commit and unlock
-        cu.lock()
+    source = None
+    if filters:
         try:
-            cu.load(configuration_snippet, format=fmt)
-            logger.info("Running commit check...")
-            cu.commit(check=True)
-            logger.info("Commit check succeeded! Committing...")
-            cu.commit(comment=description or "Configured via MCP Agent")
-            cu.unlock()
-            return f"Success: Configuration applied and committed successfully to '{device_name}'."
-        except Exception as load_err:
-            logger.warning("Configuration commit check failed. Rolling back changes...")
-            try:
-                cu.rollback()
-            except Exception:
-                pass
-            try:
-                cu.unlock()
-            except Exception:
-                pass
-            raise load_err
+            import json
+            filter_data = json.loads(filters)
+            if isinstance(filter_data, dict):
+                source = filter_data.get("source") or filter_data.get("source_type")
+        except Exception as e:
+            logger.warning(f"Failed to parse filters JSON '{filters}': {e}")
 
+    try:
+        payload = {
+            "query": query,
+            "top_k": 5
+        }
+        if source in ["kb", "book"]:
+            payload["source"] = source
+
+        url = f"{KNOWLEDGE_BASE_URL}/search"
+        resp = req_lib.post(
+            url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=15
+        )
+        if resp.status_code == 200:
+            results = resp.json()
+            if not results:
+                return f"No relevant information found in the knowledge base for query: '{query}'."
+
+            response_lines = [f"Found {len(results)} relevant knowledge base documents for query '{query}':\n"]
+            for idx, item in enumerate(results, 1):
+                score = item.get("score", 0.0)
+                source_type = item.get("source_type", "unknown").upper()
+                title = item.get("title", "No Title")
+                url_val = item.get("url")
+                page_num = item.get("page_num")
+                text = item.get("text", "")
+
+                meta = f"Type: {source_type}"
+                if page_num:
+                    meta += f" | Page: {page_num}"
+                if url_val:
+                    meta += f" | URL: {url_val}"
+
+                response_lines.append(f"[{idx}] {title} (Similarity Score: {score:.4f})")
+                response_lines.append(f"Metadata: {meta}")
+                response_lines.append(f"Content:\n{text}")
+                response_lines.append("-" * 40 + "\n")
+            return "\n".join(response_lines)
+        else:
+            return f"Error querying knowledge base: HTTP {resp.status_code} — {resp.text[:500]}"
+    except req_lib.exceptions.Timeout:
+        return "Error: Knowledge Base API request timed out."
     except Exception as e:
-        logger.error(f"Failed to edit device configuration: {e}")
-        return f"Error applying configuration to device '{device_name}': {e}"
+        logger.error(f"query_knowledge_base exception: {e}")
+        return f"Error querying knowledge base: {e}"
+
+
+# ===================================================================
+# HARDWARE & TOPOLOGY TOOLS (unchanged)
+# ===================================================================
 
 @mcp.tool()
 def get_device_hardware(device_name: str) -> str:
@@ -536,7 +1033,10 @@ def get_network_topology() -> str:
 
     return "\n".join(result)
 
-# --- Phase 3: Enhanced Diagnostic Tools ---
+
+# ===================================================================
+# DIAGNOSTIC TOOLS
+# ===================================================================
 
 @mcp.tool()
 def ping_from_device(device_name: str, destination: str, count: int = 5) -> str:
@@ -616,101 +1116,9 @@ def get_interface_diagnostics(device_name: str, interface_name: str) -> str:
         return f"Error getting diagnostics for '{interface_name}' on '{device_name}': {e}"
 
 
-@mcp.tool()
-def execute_shell(command: str, timeout: int = 30, working_directory: str = "/tmp") -> str:
-    """Execute a shell command on the MCP Gateway Linux server.
-
-    This server has direct network access to the lab (IP LAN range).
-    Use this for network diagnostics, running scripts, or system operations.
-
-    Common use cases:
-    - Network diagnostics: ping, traceroute, dig, nslookup, nmap, curl
-    - File processing: grep, awk, sed, wc on log files
-    - Python scripts: python3 -c "..." or python3 script.py
-
-    Args:
-        command: The shell command to execute.
-        timeout: Maximum execution time in seconds (default 30, max 120).
-        working_directory: Working directory for the command (default /tmp).
-    """
-    timeout = min(timeout, 120)  # Cap at 2 minutes
-    logger.info(f"Executing shell command: {command[:100]}...")
-
-    try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=working_directory,
-        )
-
-        output = f"--- Shell Command: {command[:100]} ---\n"
-        output += f"Return Code: {result.returncode}\n"
-        if result.stdout:
-            stdout = result.stdout[:50000]
-            trunc = " [TRUNCATED]" if len(result.stdout) > 50000 else ""
-            output += f"STDOUT{trunc}:\n{stdout}\n"
-        if result.stderr:
-            stderr = result.stderr[:10000]
-            output += f"STDERR:\n{stderr}\n"
-        return output
-
-    except subprocess.TimeoutExpired:
-        return f"Error: Command timed out after {timeout} seconds."
-    except Exception as e:
-        return f"Error executing command: {e}"
-
-
-@mcp.tool()
-def write_and_run_script(
-    script_content: str,
-    script_name: str = "agent_script.py",
-    timeout: int = 60,
-) -> str:
-    """Write a Python script to disk and execute it on the MCP Gateway server.
-
-    Use this to run complex network automation scripts that need:
-    - Direct access to lab devices (IP LAN range)
-    - Python libraries available on the server
-    - Multi-step logic that can't be done in a single shell command
-
-    Args:
-        script_content: The full Python script content to execute.
-        script_name: Filename for the script (default: agent_script.py).
-        timeout: Maximum execution time in seconds (default 60, max 300).
-    """
-    timeout = min(timeout, 300)
-    script_dir = "/tmp/agent-scripts"
-    os.makedirs(script_dir, exist_ok=True)
-
-    script_path = os.path.join(script_dir, script_name)
-    try:
-        with open(script_path, 'w') as f:
-            f.write(script_content)
-
-        result = subprocess.run(
-            ["python3", script_path],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=script_dir,
-        )
-
-        output = f"--- Script: {script_name} ---\n"
-        output += f"Return Code: {result.returncode}\n"
-        if result.stdout:
-            output += f"STDOUT:\n{result.stdout[:50000]}\n"
-        if result.stderr:
-            output += f"STDERR:\n{result.stderr[:10000]}\n"
-        return output
-
-    except subprocess.TimeoutExpired:
-        return f"Error: Script timed out after {timeout} seconds."
-    except Exception as e:
-        return f"Error running script: {e}"
-
+# ===================================================================
+# GIT OPERATIONS (kept — version control is read/write safe)
+# ===================================================================
 
 @mcp.tool()
 def git_operation(
@@ -749,6 +1157,10 @@ def git_operation(
         return f"Error: Git operation failed: {e}"
 
 
+# ===================================================================
+# MONITORING TOOLS (Prometheus & Loki)
+# ===================================================================
+
 @mcp.tool()
 async def get_device_status(device_ip: str) -> str:
     """Check the status of a network device using SNMP metrics from Prometheus.
@@ -784,17 +1196,17 @@ async def get_interface_traffic(device_ip: str, interface_name: str) -> str:
         # Using rate() on ifHCInOctets and ifHCOutOctets
         query_in = f'rate(interface_traffic_ifHCInOctets{{instance="{device_ip}:9273", ifName="{interface_name}"}}[5m]) * 8'
         query_out = f'rate(interface_traffic_ifHCOutOctets{{instance="{device_ip}:9273", ifName="{interface_name}"}}[5m]) * 8'
-        
+
         try:
             res_in = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query_in})
             res_out = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": query_out})
-            
+
             data_in = res_in.json()
             data_out = res_out.json()
-            
+
             val_in = data_in["data"]["result"][0]["value"][1] if data_in["data"]["result"] else "0"
             val_out = data_out["data"]["result"][0]["value"][1] if data_out["data"]["result"] else "0"
-            
+
             return f"Traffic on {interface_name} for {device_ip}:\nInbound: {float(val_in)/1000000:.2f} Mbps\nOutbound: {float(val_out)/1000000:.2f} Mbps"
         except Exception as e:
             return f"Error querying Prometheus: {str(e)}"
@@ -826,6 +1238,169 @@ async def get_device_logs(device_ip: str, limit: int = 10) -> str:
             return f"Error querying Loki: {str(e)}"
 
 
+# ===================================================================
+# WEBHOOK HANDLER: Jira Approval → Config Push (Slow-Track completion)
+# ===================================================================
+
+def _verify_jira_webhook_signature(payload_body: bytes, signature_header: str) -> bool:
+    """Verify HMAC-SHA256 signature from Jira webhook."""
+    if not JIRA_WEBHOOK_SECRET:
+        logger.warning("JIRA_WEBHOOK_SECRET not configured — skipping signature verification")
+        return True
+
+    # Extract the hex digest if prefixed with sha256=
+    if signature_header.startswith("sha256="):
+        signature_header = signature_header.split("=", 1)[1]
+
+    expected_sig = hmac.new(
+        JIRA_WEBHOOK_SECRET.encode("utf-8"),
+        payload_body,
+        hashlib.sha256,
+    ).hexdigest()
+
+    return hmac.compare_digest(expected_sig, signature_header or "")
+
+
+def _execute_config_change(device_name: str, config_payload: str, description: str = "") -> tuple[bool, str]:
+    """Execute configuration change with careful multi-step process.
+
+    Steps (per user spec):
+    1. Backup current config (show config | display set)
+    2. Lock configuration database
+    3. Load proposed configuration
+    4. Commit check (validate syntax and logic)
+    5. Commit confirmed 3 (auto-rollback after 3 minutes if not confirmed)
+    6. Final commit (confirm the change)
+
+    If any step fails → stop immediately, rollback, unlock, return error.
+
+    For multi-device changes: caller must invoke this one device at a time.
+    """
+    logger.info(f"Executing careful config change on {device_name}")
+    steps_log = []
+
+    try:
+        dev = pool.get(device_name)
+        cu = Config(dev)
+
+        # Step 1: Backup current config
+        try:
+            backup_res = dev.rpc.get_config(options={'format': 'set'})
+            backup_text = etree.tostring(backup_res, pretty_print=True, encoding='unicode')
+            steps_log.append(f"✅ Step 1: Config backup captured ({len(backup_text)} chars)")
+        except Exception as e:
+            steps_log.append(f"⚠️ Step 1: Backup warning (non-fatal): {e}")
+
+        # Step 2: Lock configuration database
+        try:
+            cu.lock()
+            steps_log.append("✅ Step 2: Configuration database locked")
+        except Exception as e:
+            steps_log.append(f"❌ Step 2: Failed to lock configuration: {e}")
+            return False, "\n".join(steps_log)
+
+        try:
+            # Step 3: Load proposed configuration
+            is_set = any(line.strip().startswith(("set", "delete")) for line in config_payload.split("\n"))
+            fmt = "set" if is_set else "text"
+
+            cu.load(config_payload, format=fmt)
+            steps_log.append(f"✅ Step 3: Configuration loaded (format: {fmt})")
+
+            # Step 4: Commit check
+            cu.commit(check=True)
+            steps_log.append("✅ Step 4: Commit check passed")
+
+            # Step 5: Commit confirmed 3 (auto-rollback after 3 minutes)
+            cu.commit(confirm=3, comment=description or "MCP Gateway — Jira approved change (confirmed 3min)")
+            steps_log.append("✅ Step 5: Commit confirmed 3 — change active (auto-rollback in 3 min if not confirmed)")
+
+            # Step 6: Final commit (confirm the change permanently)
+            cu.commit(comment=description or "MCP Gateway — Confirmed permanent commit")
+            steps_log.append("✅ Step 6: Final commit — change confirmed permanently")
+
+        except Exception as load_err:
+            steps_log.append(f"❌ Failed at loading/committing: {load_err}")
+            logger.warning(f"Config change failed on {device_name}. Rolling back...")
+            try:
+                cu.rollback()
+                steps_log.append("↩️ Rollback executed successfully")
+            except Exception as rb_err:
+                steps_log.append(f"⚠️ Rollback error: {rb_err}")
+            try:
+                cu.unlock()
+            except Exception:
+                pass
+            return False, "\n".join(steps_log)
+
+        # Unlock after success
+        try:
+            cu.unlock()
+            steps_log.append("🔓 Configuration database unlocked")
+        except Exception as unlock_err:
+            steps_log.append(f"⚠️ Unlock warning: {unlock_err}")
+
+        return True, "\n".join(steps_log)
+
+    except Exception as e:
+        steps_log.append(f"❌ Connection/execution error: {e}")
+        return False, "\n".join(steps_log)
+
+
+def _update_jira_issue_status(issue_key: str, success: bool, log_text: str):
+    """Update Jira ticket with deployment result."""
+    if not JIRA_BASE_URL or not JIRA_USER_EMAIL or not JIRA_API_TOKEN:
+        logger.warning("Jira not configured — cannot update issue status")
+        return
+
+    # Add comment with deployment log
+    comment_body = _text_to_adf(
+        f"{'✅ DEPLOYMENT SUCCESSFUL' if success else '❌ DEPLOYMENT FAILED'}\n\n"
+        f"--- Deployment Log ---\n{log_text}"
+    )
+
+    try:
+        # Add comment
+        comment_url = f"{JIRA_BASE_URL}/rest/api/3/issue/{issue_key}/comment"
+        req_lib.post(
+            comment_url,
+            json={"body": comment_body},
+            auth=(JIRA_USER_EMAIL, JIRA_API_TOKEN),
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            timeout=15,
+        )
+
+        # Transition to Done/Failed
+        transitions_url = f"{JIRA_BASE_URL}/rest/api/3/issue/{issue_key}/transitions"
+        resp = req_lib.get(
+            transitions_url,
+            auth=(JIRA_USER_EMAIL, JIRA_API_TOKEN),
+            headers={"Accept": "application/json"},
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            transitions = resp.json().get("transitions", [])
+            target_name = "done" if success else "error"
+            for t in transitions:
+                if target_name in t["name"].lower():
+                    req_lib.post(
+                        transitions_url,
+                        json={"transition": {"id": t["id"]}},
+                        auth=(JIRA_USER_EMAIL, JIRA_API_TOKEN),
+                        headers={"Accept": "application/json", "Content-Type": "application/json"},
+                        timeout=15,
+                    )
+                    logger.info(f"Jira {issue_key} transitioned to '{t['name']}'")
+                    break
+
+    except Exception as e:
+        logger.error(f"Failed to update Jira issue {issue_key}: {e}")
+
+
+# ===================================================================
+# STARTUP — Main entry point
+# ===================================================================
+
 if __name__ == "__main__":
     # Configure Git credentials if provided
     git_username = os.environ.get("GIT_USERNAME")
@@ -835,20 +1410,20 @@ if __name__ == "__main__":
         logger.info("Configuring Git user name and email...")
         subprocess.run(["git", "config", "--global", "user.name", git_username], check=False)
         subprocess.run(["git", "config", "--global", "user.email", git_email], check=False)
-        
+
         if git_password:
             logger.info("Configuring Git credential helper...")
             subprocess.run(["git", "config", "--global", "credential.helper", "store"], check=False)
-            
+
             # Write to ~/.git-credentials
             home_dir = os.path.expanduser("~")
             creds_path = os.path.join(home_dir, ".git-credentials")
-            
+
             import urllib.parse
             encoded_username = urllib.parse.quote_plus(git_username)
             encoded_password = urllib.parse.quote_plus(git_password)
             cred_line = f"https://{encoded_username}:{encoded_password}@github.com\n"
-            
+
             try:
                 with open(creds_path, "w") as f:
                     f.write(cred_line)
@@ -856,5 +1431,331 @@ if __name__ == "__main__":
             except Exception as e:
                 logger.error(f"Failed to write git credentials: {e}")
 
+    # --- Mount Jira webhook endpoint alongside FastMCP SSE ---
+    # FastMCP uses Starlette under the hood; we add a custom route for the webhook
+    from starlette.requests import Request
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def jira_webhook_handler(request: Request) -> JSONResponse:
+        """Handle Jira webhook for approved configuration changes."""
+        logger.info("Received Jira webhook request")
+
+        # Read raw body for signature verification
+        body = await request.body()
+
+        # Verify HMAC-SHA256 signature
+        signature = request.headers.get("X-Hub-Signature", "") or request.headers.get("x-hub-signature", "")
+        if JIRA_WEBHOOK_SECRET and not _verify_jira_webhook_signature(body, signature):
+            logger.warning("Jira webhook signature verification failed!")
+            return JSONResponse({"error": "Invalid signature"}, status_code=401)
+
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+        # Parse webhook payload
+        webhook_event = data.get("webhookEvent", "")
+        issue = data.get("issue", {})
+        issue_key = issue.get("key", "UNKNOWN")
+        fields = issue.get("fields", {})
+
+        # Check if this is an approval event
+        status_name = fields.get("status", {}).get("name", "").lower()
+        if "approved" not in status_name and "approve" not in status_name:
+            logger.info(f"Webhook for {issue_key}: status '{status_name}' is not an approval. Ignoring.")
+            return JSONResponse({"status": "ignored", "reason": "Not an approval event"})
+
+        # Extract device and config from description text (since custom fields are not configured)
+        description_doc = fields.get("description", {})
+        device_name = ""
+        config_payload = ""
+
+        # Parse from ADF description
+        if isinstance(description_doc, dict):
+            # Extract text content from ADF
+            full_text = ""
+            for block in description_doc.get("content", []):
+                for node in block.get("content", []):
+                    if node.get("type") == "text":
+                        full_text += node.get("text", "")
+                full_text += "\n"
+
+            # Parse device and config from structured description
+            import re
+            device_match = re.search(r"📍 Device:\s*(.+?)(?:\n|$)", full_text)
+            if device_match:
+                device_name = device_match.group(1).strip()
+                # Extract hostname from "hostname (ip)" format
+                if "(" in device_name:
+                    device_name = device_name.split("(")[0].strip()
+
+            config_match = re.search(r"--- CONFIGURATION PAYLOAD ---\n(.*?)(?:\n--- |$)", full_text, re.DOTALL)
+            if config_match:
+                config_payload = config_match.group(1).strip()
+
+        if not device_name or not config_payload:
+            logger.error(f"Webhook for {issue_key}: could not parse device or config from description")
+            _update_jira_issue_status(issue_key, False, "Failed to parse device or configuration from ticket description.")
+            return JSONResponse({"error": "Missing device or config in ticket"}, status_code=400)
+
+        logger.info(f"Webhook: Executing approved change on {device_name}: {config_payload[:100]}...")
+
+        # Execute the config change with careful multi-step process
+        success, log_text = _execute_config_change(
+            device_name, config_payload,
+            description=f"Jira approved: {issue_key}"
+        )
+
+        # Update Jira with result
+        _update_jira_issue_status(issue_key, success, log_text)
+
+        return JSONResponse({
+            "status": "success" if success else "failed",
+            "issue_key": issue_key,
+            "device": device_name,
+            "log": log_text,
+        })
+
+    # Add webhook route to the FastMCP app
+    webhook_route = Route("/webhook/jira", jira_webhook_handler, methods=["POST"])
+
+    # --- Admin API endpoints for the web UI ---
+    async def admin_get_operations(request: Request) -> JSONResponse:
+        """List/search operation commands from SQLite DB."""
+        page = int(request.query_params.get("page", 1))
+        limit = int(request.query_params.get("limit", 20))
+        vendor = request.query_params.get("vendor", "")
+        risk_level = request.query_params.get("risk_level", "")
+        search = request.query_params.get("search", "")
+
+        try:
+            conn = sqlite3.connect(OPERATION_COMMANDS_DB)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+
+            if search:
+                fts_query = search.replace('"', '""')
+                count_sql = "SELECT count(*) FROM operation_commands_fts fts JOIN operation_commands oc ON fts.rowid = oc.id WHERE operation_commands_fts MATCH ?"
+                data_sql = """SELECT oc.* FROM operation_commands_fts fts
+                    JOIN operation_commands oc ON fts.rowid = oc.id
+                    WHERE operation_commands_fts MATCH ?"""
+                params = [fts_query]
+            else:
+                count_sql = "SELECT count(*) FROM operation_commands WHERE 1=1"
+                data_sql = "SELECT * FROM operation_commands WHERE 1=1"
+                params = []
+
+            if vendor:
+                count_sql += " AND vendor = ?"
+                data_sql += " AND oc.vendor = ?" if search else " AND vendor = ?"
+                params.append(vendor)
+            if risk_level:
+                count_sql += " AND risk_level = ?"
+                data_sql += " AND oc.risk_level = ?" if search else " AND risk_level = ?"
+                params.append(risk_level)
+
+            cur.execute(count_sql, params)
+            total = cur.fetchone()[0]
+
+            data_sql += f" LIMIT {limit} OFFSET {(page - 1) * limit}"
+            cur.execute(data_sql, params)
+            rows = [dict(r) for r in cur.fetchall()]
+            conn.close()
+
+            return JSONResponse({"items": rows, "total": total, "page": page})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    async def admin_update_operation(request: Request) -> JSONResponse:
+        """Update an operation command."""
+        op_id = request.path_params["id"]
+        data = await request.json()
+        try:
+            conn = sqlite3.connect(OPERATION_COMMANDS_DB)
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE operation_commands SET command_name=?, vendor=?, risk_level=?, short_desc=?, syntax=? WHERE id=?",
+                (data.get("command_name"), data.get("vendor"), data.get("risk_level"),
+                 data.get("short_desc"), data.get("syntax"), op_id)
+            )
+            conn.commit()
+            conn.close()
+            return JSONResponse({"status": "ok"})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    async def admin_add_operation(request: Request) -> JSONResponse:
+        """Add a new operation command."""
+        data = await request.json()
+        try:
+            conn = sqlite3.connect(OPERATION_COMMANDS_DB)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO operation_commands (vendor, command_name, short_desc, risk_level, syntax) VALUES (?, ?, ?, ?, ?)",
+                (data.get("vendor", "juniper"), data.get("command_name"), data.get("short_desc"),
+                 data.get("risk_level", "INFO"), data.get("syntax"))
+            )
+            conn.commit()
+            new_id = cur.lastrowid
+            conn.close()
+            return JSONResponse({"status": "ok", "id": new_id})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    async def admin_get_configurations(request: Request) -> JSONResponse:
+        """List/search configuration statements from SQLite DB."""
+        page = int(request.query_params.get("page", 1))
+        limit = int(request.query_params.get("limit", 20))
+        vendor = request.query_params.get("vendor", "")
+        search = request.query_params.get("search", "")
+
+        try:
+            conn = sqlite3.connect(CONFIG_STATEMENTS_DB)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+
+            if search:
+                fts_query = search.replace('"', '""')
+                count_sql = "SELECT count(*) FROM config_statements_fts fts JOIN config_statements cs ON fts.rowid = cs.id WHERE config_statements_fts MATCH ?"
+                data_sql = """SELECT cs.* FROM config_statements_fts fts
+                    JOIN config_statements cs ON fts.rowid = cs.id
+                    WHERE config_statements_fts MATCH ?"""
+                params = [fts_query]
+            else:
+                count_sql = "SELECT count(*) FROM config_statements WHERE 1=1"
+                data_sql = "SELECT * FROM config_statements WHERE 1=1"
+                params = []
+
+            if vendor:
+                count_sql += " AND vendor = ?"
+                data_sql += " AND cs.vendor = ?" if search else " AND vendor = ?"
+                params.append(vendor)
+
+            cur.execute(count_sql, params)
+            total = cur.fetchone()[0]
+
+            data_sql += f" LIMIT {limit} OFFSET {(page - 1) * limit}"
+            cur.execute(data_sql, params)
+            rows = [dict(r) for r in cur.fetchall()]
+            conn.close()
+
+            return JSONResponse({"items": rows, "total": total, "page": page})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    async def admin_update_configuration(request: Request) -> JSONResponse:
+        """Update a configuration statement."""
+        cfg_id = request.path_params["id"]
+        data = await request.json()
+        try:
+            conn = sqlite3.connect(CONFIG_STATEMENTS_DB)
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE config_statements SET statement_name=?, vendor=?, short_desc=?, syntax=?, hierarchy_level=? WHERE id=?",
+                (data.get("statement_name"), data.get("vendor"), data.get("short_desc"),
+                 data.get("syntax"), data.get("hierarchy_level"), cfg_id)
+            )
+            conn.commit()
+            conn.close()
+            return JSONResponse({"status": "ok"})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    async def admin_add_configuration(request: Request) -> JSONResponse:
+        """Add a new configuration statement."""
+        data = await request.json()
+        try:
+            conn = sqlite3.connect(CONFIG_STATEMENTS_DB)
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO config_statements (vendor, statement_name, short_desc, syntax, hierarchy_level) VALUES (?, ?, ?, ?, ?)",
+                (data.get("vendor", "juniper"), data.get("statement_name"), data.get("short_desc"),
+                 data.get("syntax"), data.get("hierarchy_level"))
+            )
+            conn.commit()
+            new_id = cur.lastrowid
+            conn.close()
+            return JSONResponse({"status": "ok", "id": new_id})
+        except Exception as e:
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    async def admin_get_devices(request: Request) -> JSONResponse:
+        """List all devices from DEVICE_MAP."""
+        devices = []
+        for name, info in DEVICE_MAP.items():
+            devices.append({
+                "name": name,
+                "hostname": name,
+                **info,
+            })
+        return JSONResponse(devices)
+
+    async def admin_add_device(request: Request) -> JSONResponse:
+        """Add a new device to the inventory."""
+        data = await request.json()
+        name = data.get("name", "")
+        if not name or not data.get("ip"):
+            return JSONResponse({"error": "Name and IP are required"}, status_code=400)
+
+        # Add to DEVICE_MAP
+        DEVICE_MAP[name] = {
+            "ip": data["ip"],
+            "port": data.get("port", 830),
+            "model": data.get("model", "Unknown"),
+            "vendor": data.get("vendor", "juniper"),
+            "connection_method": data.get("connection_method", "netconf"),
+            "role": data.get("role", ""),
+            "status": "Online",
+        }
+
+        # Save to devices.json
+        try:
+            devices_data = {"devices": {}}
+            for dname, dinfo in DEVICE_MAP.items():
+                devices_data["devices"][dname] = {"name": dname, **dinfo}
+            with open(DEVICES_FILE, "w") as f:
+                json.dump(devices_data, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save devices.json: {e}")
+
+        return JSONResponse({"status": "ok", "name": name})
+
+    # Admin static files
+    from starlette.staticfiles import StaticFiles
+
+    admin_routes = [
+        Route("/admin/api/operations", admin_get_operations, methods=["GET"]),
+        Route("/admin/api/operations", admin_add_operation, methods=["POST"]),
+        Route("/admin/api/operations/{id:int}", admin_update_operation, methods=["PUT"]),
+        Route("/admin/api/configurations", admin_get_configurations, methods=["GET"]),
+        Route("/admin/api/configurations", admin_add_configuration, methods=["POST"]),
+        Route("/admin/api/configurations/{id:int}", admin_update_configuration, methods=["PUT"]),
+        Route("/admin/api/devices", admin_get_devices, methods=["GET"]),
+        Route("/admin/api/devices", admin_add_device, methods=["POST"]),
+    ]
+
     logger.info(f"Starting FastMCP server with SSE transport on port {MCP_PORT}...")
-    mcp.run(transport="sse")
+    logger.info(f"Jira webhook endpoint: POST /webhook/jira")
+    logger.info(f"Admin UI: http://0.0.0.0:{MCP_PORT}/admin/")
+    logger.info(f"Command timeout: {COMMAND_TIMEOUT}s")
+
+    # Start the MCP server with webhook + admin routes added
+    import uvicorn
+    from starlette.applications import Starlette
+    from starlette.middleware import Middleware
+
+    # Get the MCP app and add our routes
+    mcp_app = mcp.sse_app()
+    mcp_app.routes.append(webhook_route)
+    for route in admin_routes:
+        mcp_app.routes.append(route)
+
+    # Mount admin static files
+    admin_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "admin")
+    if os.path.isdir(admin_dir):
+        mcp_app.mount("/admin", StaticFiles(directory=admin_dir, html=True), name="admin")
+        logger.info(f"Admin UI mounted from {admin_dir}")
+
+    uvicorn.run(mcp_app, host="0.0.0.0", port=MCP_PORT)

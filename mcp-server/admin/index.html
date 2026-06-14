@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Gateway — Command & Configuration Admin</title>
+    <meta name="description" content="Admin dashboard for managing network command ACL rules, operation commands, and configuration statements.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <nav class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+                        <rect width="32" height="32" rx="8" fill="url(#logo-grad)"/>
+                        <path d="M8 16L14 10L20 16L14 22Z" fill="white" opacity="0.9"/>
+                        <path d="M14 16L20 10L26 16L20 22Z" fill="white" opacity="0.6"/>
+                        <defs><linearGradient id="logo-grad" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#6366f1"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
+                    </svg>
+                    <span class="logo-text">MCP Admin</span>
+                </div>
+            </div>
+            <ul class="nav-menu">
+                <li class="nav-item active" data-tab="acl">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    <span>Command ACL</span>
+                </li>
+                <li class="nav-item" data-tab="operations">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                    <span>Operation Commands</span>
+                </li>
+                <li class="nav-item" data-tab="configurations">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    <span>Config Statements</span>
+                </li>
+                <li class="nav-item" data-tab="devices">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                    <span>Devices</span>
+                </li>
+            </ul>
+            <div class="sidebar-footer">
+                <div class="status-badge">
+                    <span class="status-dot"></span>
+                    <span>MCP Gateway Online</span>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="top-header">
+                <div class="header-left">
+                    <button class="menu-toggle" id="menuToggle">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                    </button>
+                    <h1 id="pageTitle">Command ACL Rules</h1>
+                </div>
+                <div class="header-right">
+                    <div class="search-box">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input type="text" id="globalSearch" placeholder="Search commands, statements...">
+                    </div>
+                </div>
+            </header>
+
+            <!-- Tab Content -->
+            <div class="content-area">
+
+                <!-- ACL Tab -->
+                <section class="tab-content active" id="tab-acl">
+                    <div class="card-grid">
+                        <div class="card card-whitelist">
+                            <div class="card-header">
+                                <h3>✅ Whitelist Rules</h3>
+                                <span class="badge badge-success">Active</span>
+                            </div>
+                            <p class="card-desc">Commands matching these patterns are <strong>allowed</strong> through the Fast-Track.</p>
+                            <div class="rule-list" id="whitelistRules"></div>
+                            <div class="card-actions">
+                                <input type="text" id="newWhitelistRule" placeholder="e.g., ^(show|display)\s+.*$" class="input-field">
+                                <button class="btn btn-primary" onclick="addWhitelistRule()">Add Rule</button>
+                            </div>
+                        </div>
+                        <div class="card card-blacklist">
+                            <div class="card-header">
+                                <h3>🚫 Blacklist Keywords</h3>
+                                <span class="badge badge-danger">Blocking</span>
+                            </div>
+                            <p class="card-desc">Commands containing these keywords are <strong>blocked</strong>. Takes priority over whitelist.</p>
+                            <div class="rule-list" id="blacklistRules"></div>
+                            <div class="card-actions">
+                                <input type="text" id="newBlacklistRule" placeholder="e.g., format disk" class="input-field">
+                                <button class="btn btn-danger" onclick="addBlacklistRule()">Add Keyword</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ACL Test -->
+                    <div class="card card-test">
+                        <div class="card-header">
+                            <h3>🧪 Test Command ACL</h3>
+                        </div>
+                        <div class="test-area">
+                            <input type="text" id="testCommand" placeholder="Enter a command to test against ACL..." class="input-field input-large">
+                            <button class="btn btn-primary" onclick="testACL()">Test</button>
+                        </div>
+                        <div id="testResult" class="test-result"></div>
+                    </div>
+                </section>
+
+                <!-- Operations Tab -->
+                <section class="tab-content" id="tab-operations">
+                    <div class="table-controls">
+                        <div class="table-controls-left">
+                            <select id="opsVendorFilter" class="select-field" onchange="loadOperations()">
+                                <option value="">All Vendors</option>
+                                <option value="juniper">Juniper</option>
+                                <option value="cisco">Cisco</option>
+                                <option value="arista">Arista</option>
+                            </select>
+                            <select id="opsRiskFilter" class="select-field" onchange="loadOperations()">
+                                <option value="">All Risk Levels</option>
+                                <option value="INFO">INFO</option>
+                                <option value="WARNING">WARNING</option>
+                                <option value="CRITICAL">CRITICAL</option>
+                            </select>
+                        </div>
+                        <div class="table-controls-right">
+                            <input type="text" id="opsSearch" placeholder="Search commands..." class="input-field" oninput="loadOperations()">
+                            <button class="btn btn-primary" onclick="showAddOperationModal()">+ Add Command</button>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table class="data-table" id="opsTable">
+                            <thead>
+                                <tr>
+                                    <th>Command</th>
+                                    <th>Vendor</th>
+                                    <th>Risk</th>
+                                    <th>Description</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="opsTableBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="pagination" id="opsPagination"></div>
+                </section>
+
+                <!-- Configurations Tab -->
+                <section class="tab-content" id="tab-configurations">
+                    <div class="table-controls">
+                        <div class="table-controls-left">
+                            <select id="cfgVendorFilter" class="select-field" onchange="loadConfigurations()">
+                                <option value="">All Vendors</option>
+                                <option value="juniper">Juniper</option>
+                            </select>
+                        </div>
+                        <div class="table-controls-right">
+                            <input type="text" id="cfgSearch" placeholder="Search statements..." class="input-field" oninput="loadConfigurations()">
+                            <button class="btn btn-primary" onclick="showAddConfigModal()">+ Add Statement</button>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table class="data-table" id="cfgTable">
+                            <thead>
+                                <tr>
+                                    <th>Statement</th>
+                                    <th>Vendor</th>
+                                    <th>Description</th>
+                                    <th>Hierarchy</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="cfgTableBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="pagination" id="cfgPagination"></div>
+                </section>
+
+                <!-- Devices Tab -->
+                <section class="tab-content" id="tab-devices">
+                    <div class="table-controls">
+                        <div class="table-controls-right">
+                            <button class="btn btn-primary" onclick="showAddDeviceModal()">+ Add Device</button>
+                        </div>
+                    </div>
+                    <div class="device-grid" id="deviceGrid"></div>
+                </section>
+
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal -->
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal" id="modal">
+            <div class="modal-header">
+                <h3 id="modalTitle">Details</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-footer" id="modalFooter"></div>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="admin.js"></script>
+</body>
+</html>

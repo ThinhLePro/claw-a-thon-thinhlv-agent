@@ -12,6 +12,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY mcp_server.py .
+COPY command_acl.py .
+COPY admin/ ./admin/
+
+# Command databases are mounted at runtime via docker-compose
+# Volume: ./shared/db:/app/db:ro
 
 # Shared device inventory is mounted at runtime via docker-compose
 # Volume: ./shared:/app/shared:ro

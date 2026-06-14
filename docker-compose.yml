@@ -8,10 +8,11 @@ services:
     container_name: juniper-mcp-server
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8980:8980"
     env_file: ./mcp-server/.env
     volumes:
       - ./shared:/app/shared:ro
+      - ./shared/db:/app/db:ro
     networks:
       - mcp-net
 

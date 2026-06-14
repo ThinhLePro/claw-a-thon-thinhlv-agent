@@ -190,8 +190,12 @@ def update_plan_step(step_number: int, status: str, result_summary: str) -> str:
 
 # --- Auto-discover MCP Device Tools ---
 logger.info(f"Discovering MCP tools from {MCP_SERVER_URL}...")
-mcp_tools = discover_mcp_tools(MCP_SERVER_URL)
-logger.info(f"Successfully registered {len(mcp_tools)} MCP tools")
+try:
+    mcp_tools = discover_mcp_tools(MCP_SERVER_URL)
+    logger.info(f"Successfully registered {len(mcp_tools)} MCP tools")
+except Exception as e:
+    logger.error(f"Failed to discover MCP tools at startup: {e}. Starting agent with empty MCP tools.")
+    mcp_tools = []
 
 
 # --- Create Agent with Checkpointer + Conversation Compaction ---

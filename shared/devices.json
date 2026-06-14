@@ -5,6 +5,8 @@
       "ip": "10.0.0.1",
       "port": 830,
       "model": "QFX10008",
+      "vendor": "juniper",
+      "connection_method": "netconf",
       "role": "Datacenter Gateway",
       "status": "Online"
     },
@@ -13,6 +15,8 @@
       "ip": "10.0.0.2",
       "port": 22,
       "model": "SRX1500",
+      "vendor": "juniper",
+      "connection_method": "netconf",
       "role": "Firewall Gateway",
       "status": "Online"
     },
@@ -21,6 +25,8 @@
       "ip": "10.0.0.3",
       "port": 830,
       "model": "EX4400-48T",
+      "vendor": "juniper",
+      "connection_method": "netconf",
       "role": "VNPT Access Switch",
       "status": "Online"
     },
@@ -29,6 +35,8 @@
       "ip": "10.0.0.4",
       "port": 830,
       "model": "EX4400-48T",
+      "vendor": "juniper",
+      "connection_method": "netconf",
       "role": "ToR Access Switch",
       "status": "Online"
     },
@@ -37,6 +45,8 @@
       "ip": "10.0.1.2",
       "port": 830,
       "model": "QFX5120-32C",
+      "vendor": "juniper",
+      "connection_method": "netconf",
       "role": "Core Leaf 02",
       "status": "Online"
     },
@@ -45,6 +55,8 @@
       "ip": "10.0.1.1",
       "port": 22,
       "model": "QFX5120-32C",
+      "vendor": "juniper",
+      "connection_method": "netconf",
       "role": "Core Leaf 01",
       "status": "Online"
     },
@@ -53,6 +65,8 @@
       "ip": "10.0.1.10",
       "port": 22,
       "model": "QFX5120-48Y-8C",
+      "vendor": "juniper",
+      "connection_method": "netconf",
       "role": "Core Spine 01",
       "status": "Online"
     }

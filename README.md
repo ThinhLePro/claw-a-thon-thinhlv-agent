@@ -195,18 +195,25 @@ The agent auto-discovers tools from the MCP server at startup. Currently availab
 | Tool | Description |
 |------|-------------|
 | `get_devices_list` | List all registered datacenter devices |
-| `get_device_detail` | Device operational state, uptime, specs |
+| `reload_devices` | Reload device inventory from configuration file |
+| `get_device_detail` | Device spec, uptime, role and properties |
+| `get_device_configuration_list` | Configuration commit history list |
+| `get_device_configuration_detail` | Active/filtered configuration detail |
+| `view_network_status` | Run live operational read-only CLI commands on devices |
+| `get_device_operation_list` | Suggested operational commands for a device |
+| `lookup_command_dictionary` | Look up exact CLI command syntax, templates and risk levels |
+| `propose_network_change` | Propose device configuration change via Jira ticket |
+| `query_knowledge_base` | Search internal RAG database (Juniper articles and reference books) |
 | `get_device_hardware` | Chassis hardware inventory |
 | `get_network_topology` | Live LLDP topology discovery |
-| `get_device_configuration_list` | Configuration commit history |
-| `get_device_configuration_detail` | Active/filtered configuration |
-| `get_device_operation_list` | Suggested operational commands |
-| `get_device_operation_detail` | Live CLI command output |
-| `edit_device_configuration` | Apply & commit config changes |
-| `ping_from_device` | Ping from a device |
-| `compare_device_configs` | Config diff vs rollback |
-| `check_device_alarms` | System & chassis alarms |
-| `get_interface_diagnostics` | Optics Rx/Tx power & temperature |
+| `ping_from_device` | Ping destination host directly from a network device |
+| `compare_device_configs` | Compare active config vs rollback index |
+| `check_device_alarms` | System & chassis active alarms |
+| `get_interface_diagnostics` | Optics transceiver Rx/Tx power & temperature diagnostics |
+| `git_operation` | Run Git commands (clone, status, commit, push, pull, log, diff, etc.) |
+| `get_device_status` | Query SNMP status (UP/DOWN) from Prometheus |
+| `get_interface_traffic` | Get interface traffic throughput from Prometheus |
+| `get_device_logs` | Query device syslogs from Loki |
 
 ---
 
