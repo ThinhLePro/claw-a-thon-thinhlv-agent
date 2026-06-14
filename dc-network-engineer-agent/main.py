@@ -274,20 +274,85 @@ def process_message(message: str, user_id: str, session_id: str) -> str:
 # --- HTTP Entrypoint (AgentBase Runtime) ---
 @app.entrypoint
 def handler(payload: dict, context: RequestContext) -> dict:
-    """Main agent entrypoint with LangChain + Memory support."""
+    """Main agent entrypoint with LangChain + Memory support.
+
+    Supports both interactive chat messages and event-driven alert webhooks
+    from Prometheus Alertmanager, Grafana, or custom monitoring tools.
+    """
     if not context.user_id or not context.session_id:
         return {
             "status": "error",
             "error": "Missing required headers: X-GreenNode-AgentBase-User-Id and X-GreenNode-AgentBase-Session-Id are required when using memory.",
         }
 
-    message = payload.get("message", "Hello")
-    response = process_message(message, context.user_id, context.session_id)
-    return {
-        "status": "success",
-        "response": response,
-        "timestamp": datetime.now().isoformat(),
-    }
+    # Case 1: Prometheus Alertmanager format
+    if "alerts" in payload:
+        alert_details = []
+        for alert in payload["alerts"]:
+            labels = alert.get("labels", {})
+            annotations = alert.get("annotations", {})
+            device = labels.get("device") or labels.get("instance") or "unknown"
+            alert_name = labels.get("alertname") or "Network Alert"
+            summary = annotations.get("summary") or annotations.get("description") or "No details"
+            alert_details.append(f"- Thiết bị: {device}\n  Cảnh báo: {alert_name}\n  Chi tiết: {summary}")
+        
+        alert_summary = "\n".join(alert_details)
+        prompt = (
+            f"⚠️ HỆ THỐNG GIÁM SÁT BÁO CÁO CẢNH BÁO MẠNG 24/7:\n\n"
+            f"{alert_summary}\n\n"
+            f"Nhiệm vụ của bạn:\n"
+            f"1. Tạo một ticket Jira KAN phân loại Incident cho sự cố này (trừ khi sự cố đã có ticket tương ứng).\n"
+            f"2. Chuyển trạng thái ticket sang IN_PROGRESS.\n"
+            f"3. Sử dụng các công cụ chẩn đoán (MCP tools) như check_device_alarms, get_device_logs, "
+            f"view_network_status, get_interface_diagnostics... để điều tra lỗi.\n"
+            f"4. Bình luận kết quả chẩn đoán và hướng xử lý vào ticket Jira.\n"
+            f"5. Thông báo kết quả chẩn đoán và link ticket cho kỹ sư trực NOC."
+        )
+        logger.info("Alert payload received (Prometheus), triggering AI investigation...")
+        response = process_message(prompt, context.user_id, context.session_id)
+        return {
+            "status": "success",
+            "type": "alert_response",
+            "response": response,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # Case 2: Custom Alert format
+    elif payload.get("event") == "alert":
+        device = payload.get("device_ip") or payload.get("device") or "unknown"
+        alert_name = payload.get("alert_name") or "Network Alert"
+        details = payload.get("details") or "No details"
+        prompt = (
+            f"⚠️ HỆ THỐNG GIÁM SÁT BÁO CÁO CẢNH BÁO MẠNG 24/7:\n\n"
+            f"- Thiết bị: {device}\n"
+            f"- Cảnh báo: {alert_name}\n"
+            f"- Chi tiết: {details}\n\n"
+            f"Nhiệm vụ của bạn:\n"
+            f"1. Tạo một ticket Jira KAN phân loại Incident cho sự cố này.\n"
+            f"2. Chuyển trạng thái ticket sang IN_PROGRESS.\n"
+            f"3. Sử dụng các công cụ chẩn đoán (MCP tools) để điều tra lỗi.\n"
+            f"4. Bình luận kết quả chẩn đoán và hướng xử lý vào ticket Jira.\n"
+            f"5. Thông báo kết quả chẩn đoán và link ticket cho kỹ sư trực NOC."
+        )
+        logger.info("Alert payload received (Custom), triggering AI investigation...")
+        response = process_message(prompt, context.user_id, context.session_id)
+        return {
+            "status": "success",
+            "type": "alert_response",
+            "response": response,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # Case 3: Standard user chat message
+    else:
+        message = payload.get("message", "Hello")
+        response = process_message(message, context.user_id, context.session_id)
+        return {
+            "status": "success",
+            "type": "chat_response",
+            "response": response,
+            "timestamp": datetime.now().isoformat(),
+        }
 
 
 @app.ping

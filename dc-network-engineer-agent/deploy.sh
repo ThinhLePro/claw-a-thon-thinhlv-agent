@@ -59,7 +59,7 @@ fi
 
 # 3. Registry & Runtime config
 RUNTIME_NAME="greennode-network-engineer"
-RUNTIME_ID="runtime-75ec3308-ccfb-4199-a518-9bb66be7bd22"
+RUNTIME_ID="runtime-7c7af558-b964-430c-9d35-43ebfcbbb6d9"
 FLAVOR="runtime-s2-general-4x8"
 
 echo "Fetching Container Registry repository information..."
