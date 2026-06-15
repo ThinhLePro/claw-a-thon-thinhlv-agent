@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 # Configuration — adjust these based on the target model's context window.
 # ---------------------------------------------------------------------------
 MAX_CONTEXT_TOKENS = 131_072     # Model hard limit (gemma-4-31b-it)
-COMPACTION_THRESHOLD = 105_000   # ~80% — trigger compaction at this point
+COMPACTION_THRESHOLD = 90_000    # ~70% — trigger compaction earlier to prevent overflow
 RECENT_TOKENS_BUDGET = 30_000    # Keep this many tokens of recent messages raw
 SUMMARY_MAX_TOKENS = 4_000       # Max tokens allocated for the summary itself
 
@@ -116,18 +116,21 @@ class ConversationCompactor:
         """Estimate total token count for a list of messages.
 
         Tries the LLM's native token counter first; falls back to a
-        character-based heuristic (1 token ≈ 4 chars) if that fails.
+        character-based heuristic (1 token ≈ 2 chars) if that fails.
+        Also enforces a conservative minimum estimate based on characters
+        to prevent underestimation of Vietnamese text and logs.
         """
+        total_chars = sum(len(self._get_message_text(m)) for m in messages)
+        # Conservative minimum estimate: 1 token per 2 characters (logs/Vietnamese)
+        min_estimate = total_chars // 2
+
         try:
-            return self.llm.get_num_tokens_from_messages(
+            native_estimate = self.llm.get_num_tokens_from_messages(
                 [self._msg_to_dict(m) for m in messages]
             )
+            return max(native_estimate, min_estimate)
         except Exception:
-            # Fallback: rough heuristic
-            total_chars = sum(
-                len(self._get_message_text(m)) for m in messages
-            )
-            return total_chars // 4
+            return min_estimate
 
     @staticmethod
     def _msg_to_dict(msg: BaseMessage) -> dict:
@@ -164,9 +167,9 @@ class ConversationCompactor:
     def should_compact(self, messages: list[BaseMessage]) -> bool:
         """Return True if total tokens exceed the compaction threshold."""
         token_count = self._estimate_tokens(messages)
-        logger.debug(
+        logger.info(
             f"Context window usage: ~{token_count:,} / {self.max_context_tokens:,} tokens "
-            f"({token_count * 100 // self.max_context_tokens}%)"
+            f"({token_count * 100 // self.max_context_tokens}%) | Threshold: {self.compaction_threshold:,}"
         )
         return token_count > self.compaction_threshold
 
