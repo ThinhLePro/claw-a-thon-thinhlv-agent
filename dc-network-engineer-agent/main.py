@@ -279,11 +279,8 @@ def handler(payload: dict, context: RequestContext) -> dict:
     Supports both interactive chat messages and event-driven alert webhooks
     from Prometheus Alertmanager, Grafana, or custom monitoring tools.
     """
-    if not context.user_id or not context.session_id:
-        return {
-            "status": "error",
-            "error": "Missing required headers: X-GreenNode-AgentBase-User-Id and X-GreenNode-AgentBase-Session-Id are required when using memory.",
-        }
+    user_id = context.user_id or "monitoring-system"
+    session_id = context.session_id or "monitoring-session"
 
     # Case 1: Prometheus Alertmanager format
     if "alerts" in payload:
@@ -309,7 +306,7 @@ def handler(payload: dict, context: RequestContext) -> dict:
             f"5. Thông báo kết quả chẩn đoán và link ticket cho kỹ sư trực NOC."
         )
         logger.info("Alert payload received (Prometheus), triggering AI investigation...")
-        response = process_message(prompt, context.user_id, context.session_id)
+        response = process_message(prompt, user_id, session_id)
         return {
             "status": "success",
             "type": "alert_response",
@@ -335,7 +332,7 @@ def handler(payload: dict, context: RequestContext) -> dict:
             f"5. Thông báo kết quả chẩn đoán và link ticket cho kỹ sư trực NOC."
         )
         logger.info("Alert payload received (Custom), triggering AI investigation...")
-        response = process_message(prompt, context.user_id, context.session_id)
+        response = process_message(prompt, user_id, session_id)
         return {
             "status": "success",
             "type": "alert_response",
@@ -346,7 +343,7 @@ def handler(payload: dict, context: RequestContext) -> dict:
     # Case 3: Standard user chat message
     else:
         message = payload.get("message", "Hello")
-        response = process_message(message, context.user_id, context.session_id)
+        response = process_message(message, user_id, session_id)
         return {
             "status": "success",
             "type": "chat_response",
