@@ -375,24 +375,48 @@ def initialize_tool_acls():
                 "create_jira_task", 
                 "query_previous_incidents",
                 "get_devices_list",
-                "get_device_detail"
+                "get_device_detail",
+                "add_task_comment",
+                "query_netbox_inventory",
+                "check_flapping_history",
+                "check_device_updown",
+                "execute_device_command",
+                "check_device_alarms",
+                "get_device_logs",
             ],
-            "expert-engineer-agent": [
+            "senior-network-engineer-agent": [
                 "update_task_status", 
                 "add_task_comment", 
                 "check_task_status",
-                "view_network_status", 
-                "lookup_command_dictionary",
+                "execute_device_command", 
+                "lookup_junos_syntax",
                 "get_devices_list",
                 "get_device_detail",
-                "get_device_configuration_list",
-                "get_device_configuration_detail"
+                "get_commit_history",
+                "get_device_config",
+                "propose_network_change",
+                "get_network_topology",
+                "get_device_hardware",
+                "check_device_alarms",
+                "get_interface_diagnostics",
+                "ping_from_device",
+                "query_knowledge_base",
+                "query_netbox_inventory",
+                "check_device_updown",
+                "get_interface_traffic",
+                "get_device_logs",
+                "query_previous_incidents",
+                "check_flapping_history",
+                "query_licenses",
+                "query_device_warranty",
+                "send_notification",
             ],
             "customer-advisory-agent": [
                 "update_task_status", 
                 "add_task_comment", 
                 "remove_jira_task",
-                "check_task_status"
+                "check_task_status",
+                "send_notification",
             ]
         }
         for agent, tools_list in acl_map.items():
@@ -430,24 +454,6 @@ def get_devices_list() -> str:
     return "\n".join(result)
 
 
-@mcp.tool()
-def reload_devices() -> str:
-    """Reload device inventory from the shared devices.json file.
-    Use this after updating the device inventory file to pick up new or removed devices.
-
-    Returns:
-        Summary of loaded devices after reload.
-    """
-    global DEVICE_MAP
-    logger.info("Reloading device inventory...")
-    try:
-        DEVICE_MAP = load_device_map(DEVICES_FILE)
-        # Clear connection pool for removed devices
-        pool.close_all_except(set(DEVICE_MAP.keys()))
-        names = ", ".join(DEVICE_MAP.keys())
-        return f"Reloaded successfully. {len(DEVICE_MAP)} devices: {names}"
-    except Exception as e:
-        return f"Error reloading devices: {e}"
 
 
 @mcp.tool()
@@ -479,7 +485,7 @@ def get_device_detail(device_name: str) -> str:
         return f"Error connecting to device '{device_name}': {e}"
 
 @mcp.tool()
-def get_device_configuration_list(device_name: str) -> str:
+def get_commit_history(device_name: str) -> str:
     """Get the configuration commit history of a specific device.
 
     Args:
@@ -508,8 +514,8 @@ def get_device_configuration_list(device_name: str) -> str:
         return f"Error connecting to device '{device_name}': {e}"
 
 @mcp.tool()
-def get_device_configuration_detail(device_name: str, config_type: str = "active") -> str:
-    """Get the configuration details of a specific device (optionally filter to a specific hierarchy).
+def get_device_config(device_name: str, config_type: str = "active") -> str:
+    """Get the running configuration of a specific device (optionally filter to a specific hierarchy).
 
     Args:
         device_name: The name of the device or its IP address.
@@ -563,8 +569,8 @@ def get_device_configuration_detail(device_name: str, config_type: str = "active
 # ===================================================================
 
 @mcp.tool()
-def view_network_status(device_ip: str, command: str) -> str:
-    """Execute a read-only operational command on a network device (Fast-Track).
+def execute_device_command(device_ip: str, command: str) -> str:
+    """Execute a read-only operational CLI command on a network device (Fast-Track).
 
     This tool is for gathering information and checking device status ONLY.
     All commands pass through a Command ACL that only allows safe operational
@@ -607,25 +613,6 @@ def view_network_status(device_ip: str, command: str) -> str:
         return f"Error executing command '{command}' on '{device_ip}': {e}"
 
 
-# Keep legacy name as an alias for backward compatibility
-@mcp.tool()
-def get_device_operation_list(device_name: str) -> str:
-    """Get the suggested list of operational commands/queries supported by the device.
-
-    Args:
-        device_name: The name of the device or its IP address.
-    """
-    logger.info(f"Executing tool: get_device_operation_list for {device_name}")
-    # Show standard operational queries Junos supports
-    queries = [
-        "show interfaces terse",
-        "show route",
-        "show bgp summary",
-        "show ospf neighbor",
-        "show lldp neighbors",
-        "show chassis hardware"
-    ]
-    return f"Suggested Operational Commands for {device_name}:\n" + "\n".join(f"- {q}" for q in queries)
 
 
 # ===================================================================
@@ -633,7 +620,7 @@ def get_device_operation_list(device_name: str) -> str:
 # ===================================================================
 
 @mcp.tool()
-def lookup_command_dictionary(
+def lookup_junos_syntax(
     intent_keyword: str,
     device_model: str = "",
     device_vendor: str = "juniper",
@@ -882,6 +869,7 @@ def propose_network_change(
     device_ip: str,
     config_payload: str,
     reason: str,
+    change_type: str = "CONFIGURATION CHANGE",
 ) -> str:
     """Propose a configuration change by creating a Jira Change Request ticket (Slow-Track).
 
@@ -897,6 +885,7 @@ def propose_network_change(
         device_ip: IP address or hostname of the target device.
         config_payload: The configuration commands to apply (set/delete commands or structured config block).
         reason: AI-generated analysis explaining why this change is needed.
+        change_type: The category of the change. Must be one of: 'CONFIGURATION CHANGE', 'HARDWARE CHANGE', 'SOFTWARE CHANGE', 'OTHER CHANGE'.
     """
     logger.info(f"Executing tool: propose_network_change for {device_ip}")
 
@@ -910,8 +899,18 @@ def propose_network_change(
             device_display = f"{hostname} ({info['ip']})"
             break
 
-    # Build Jira ticket
-    summary = f"[Network Change] {device_display}: {reason[:80]}"
+    # Build prefix based on change_type
+    valid_changes = {
+        "CONFIGURATION CHANGE": "[CONFIGURATION CHANGE]",
+        "HARDWARE CHANGE": "[HARDWARE CHANGE]",
+        "SOFTWARE CHANGE": "[SOFTWARE CHANGE]",
+        "OTHER CHANGE": "[OTHER CHANGE]"
+    }
+    prefix = valid_changes.get(change_type.strip().upper(), "[CONFIGURATION CHANGE]")
+
+    # Build Jira ticket and sanitize it
+    raw_summary = f"{prefix} {device_display}: {reason[:80]}"
+    summary = _sanitize_jira_summary(raw_summary, "Change Request")
     description = (
         f"🔧 Network Configuration Change Request\n\n"
         f"📍 Device: {device_display}\n"
@@ -980,7 +979,7 @@ def propose_network_change(
 @mcp.tool()
 def query_knowledge_base(
     query: str,
-    filters: str = "",
+    source_type: str = "",
 ) -> str:
     """Search the internal knowledge base for vendor documentation, best practices,
     and troubleshooting guides BEFORE diagnosing issues or designing configurations.
@@ -1014,19 +1013,11 @@ def query_knowledge_base(
 
     Args:
         query: The core question, keyword, or error code to look up (e.g., "RPD_BGP_NEIGHBOR_STATE_CHANGED", "optimize OSPF timers").
-        filters: Optional JSON string of metadata filters to narrow scope (e.g., '{"source": "kb"}' or '{"source": "book"}').
+        source_type: Optional filter to narrow search scope. Use "kb" for Juniper KB articles only, "book" for reference books only, or leave empty for both.
     """
-    logger.info(f"Executing tool: query_knowledge_base for '{query}' (filters: {filters})")
+    logger.info(f"Executing tool: query_knowledge_base for '{query}' (source_type: {source_type})")
 
-    source = None
-    if filters:
-        try:
-            import json
-            filter_data = json.loads(filters)
-            if isinstance(filter_data, dict):
-                source = filter_data.get("source") or filter_data.get("source_type")
-        except Exception as e:
-            logger.warning(f"Failed to parse filters JSON '{filters}': {e}")
+    source = source_type.strip().lower() if source_type else None
 
     try:
         payload = {
@@ -1208,23 +1199,7 @@ def ping_from_device(device_name: str, destination: str, count: int = 5) -> str:
         return f"Error executing ping from '{device_name}' to '{destination}': {e}"
 
 
-@mcp.tool()
-def compare_device_configs(device_name: str, rollback_index: int = 1) -> str:
-    """Compare current config with a previous rollback version.
 
-    Args:
-        device_name: Device name.
-        rollback_index: Rollback index to compare against (default 1 = previous commit).
-    """
-    logger.info(f"Executing tool: compare_device_configs for {device_name} (rollback {rollback_index})")
-    try:
-        dev = pool.get(device_name)
-        res = dev.rpc.cli(f"show configuration | compare rollback {rollback_index}", format='text')
-        content = res.text or res.findtext('cli-out') or "No differences found"
-        return f"--- Config Diff ({device_name}: current vs rollback {rollback_index}) ---\n{content}"
-    except Exception as e:
-        logger.error(f"Failed to compare configs: {e}")
-        return f"Error comparing configs on '{device_name}': {e}"
 
 
 @mcp.tool()
@@ -1270,41 +1245,7 @@ def get_interface_diagnostics(device_name: str, interface_name: str) -> str:
 # GIT OPERATIONS (kept — version control is read/write safe)
 # ===================================================================
 
-@mcp.tool()
-def git_operation(
-    repo_path: str,
-    operation: str,
-    args: str = "",
-) -> str:
-    """Execute a Git operation on the MCP Gateway server.
 
-    Use this for version control operations:
-    - Clone repos, commit config changes, push documentation
-    - Manage network configuration as code
-
-    Args:
-        repo_path: Path to the git repository on the server.
-        operation: Git operation (clone, status, add, commit, push, pull, log, diff).
-        args: Additional arguments for the git command.
-    """
-    ALLOWED_OPS = {"clone", "status", "add", "commit", "push", "pull", "log", "diff", "show", "branch", "checkout"}
-    if operation not in ALLOWED_OPS:
-        return f"Error: Operation '{operation}' not allowed. Allowed: {', '.join(sorted(ALLOWED_OPS))}"
-
-    cmd = f"git -C {shlex.quote(repo_path)} {operation} {args}"
-    try:
-        result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=60
-        )
-        output = f"--- Git {operation} ---\n"
-        if result.stdout:
-            output += result.stdout[:20000]
-        if result.stderr:
-            output += f"\nSTDERR: {result.stderr[:5000]}"
-        output += f"\nReturn Code: {result.returncode}"
-        return output
-    except Exception as e:
-        return f"Error: Git operation failed: {e}"
 
 
 # ===================================================================
@@ -1312,7 +1253,7 @@ def git_operation(
 # ===================================================================
 
 @mcp.tool()
-async def get_device_status(device_ip: str) -> str:
+async def check_device_updown(device_ip: str) -> str:
     """Check the status of a network device using SNMP metrics from Prometheus.
 
     Args:
@@ -1388,20 +1329,228 @@ async def get_device_logs(device_ip: str, limit: int = 10) -> str:
             return f"Error querying Loki: {str(e)}"
 
 
+@mcp.tool()
+async def check_flapping_history(device_ip: str, time_range: str = "1h") -> str:
+    """Check for interface link flapping AND BGP peer flapping on a device.
+
+    Queries Prometheus for ifOperStatus state changes (interface flaps) and
+    BGP peer state changes (BGP flaps) within the specified time range.
+    Also queries Loki syslogs for flap-related log entries.
+
+    A flapping threshold of >= 3 state changes in the time range indicates active flapping.
+
+    Args:
+        device_ip: The IP address of the device to check.
+        time_range: Prometheus time range to look back (e.g., '1h', '30m', '2h'). Default '1h'.
+    """
+    logger.info(f"Executing tool: check_flapping_history for {device_ip} (range: {time_range})")
+
+    results = []
+    flap_detected = False
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        # --- 1. Interface Flapping: Check ifOperStatus changes ---
+        try:
+            # Count ifOperStatus transitions (1->2 or 2->1) over the time range
+            intf_query = f'changes(ifOperStatus{{instance="{device_ip}:9273"}}[{time_range}])'
+            resp = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": intf_query})
+            data = resp.json()
+
+            if data.get("status") == "success" and data["data"]["result"]:
+                intf_flaps = []
+                for metric in data["data"]["result"]:
+                    iface = metric["metric"].get("ifName", metric["metric"].get("ifDescr", "unknown"))
+                    changes = int(float(metric["value"][1]))
+                    if changes >= 1:
+                        intf_flaps.append({"interface": iface, "changes": changes})
+                        if changes >= 3:
+                            flap_detected = True
+
+                if intf_flaps:
+                    intf_flaps.sort(key=lambda x: x["changes"], reverse=True)
+                    results.append(f"=== INTERFACE FLAPPING ({device_ip}, last {time_range}) ===")
+                    for f_item in intf_flaps[:20]:
+                        flag = "🔴 FLAPPING" if f_item["changes"] >= 3 else "🟡 Unstable" if f_item["changes"] >= 2 else "🟢 Minor"
+                        results.append(f"  {f_item['interface']}: {f_item['changes']} state changes [{flag}]")
+                else:
+                    results.append(f"=== INTERFACE FLAPPING ({device_ip}, last {time_range}) ===")
+                    results.append("  ✅ No interface flapping detected.")
+            else:
+                results.append(f"=== INTERFACE FLAPPING ({device_ip}, last {time_range}) ===")
+                results.append("  ⚠️ No ifOperStatus metrics available for this device in Prometheus.")
+        except Exception as e:
+            results.append(f"=== INTERFACE FLAPPING ===")
+            results.append(f"  ❌ Error querying Prometheus for interface flaps: {e}")
+
+        # --- 2. BGP Flapping: Check BGP peer state changes ---
+        try:
+            # Check BGP peer state changes (jnxBgpM2PeerState or bgpPeerState)
+            bgp_query = f'changes(jnxBgpM2PeerState{{instance="{device_ip}:9273"}}[{time_range}])'
+            resp = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": bgp_query})
+            data = resp.json()
+
+            bgp_flaps = []
+            if data.get("status") == "success" and data["data"]["result"]:
+                for metric in data["data"]["result"]:
+                    peer = metric["metric"].get("jnxBgpM2PeerRemoteAddr",
+                           metric["metric"].get("bgpPeerRemoteAddr", "unknown"))
+                    changes = int(float(metric["value"][1]))
+                    if changes >= 1:
+                        bgp_flaps.append({"peer": peer, "changes": changes})
+                        if changes >= 3:
+                            flap_detected = True
+
+            # Fallback: try standard bgpPeerState if jnxBgp returned nothing
+            if not bgp_flaps:
+                bgp_query_std = f'changes(bgpPeerState{{instance="{device_ip}:9273"}}[{time_range}])'
+                resp = await client.get(f"{PROMETHEUS_URL}/api/v1/query", params={"query": bgp_query_std})
+                data = resp.json()
+                if data.get("status") == "success" and data["data"]["result"]:
+                    for metric in data["data"]["result"]:
+                        peer = metric["metric"].get("bgpPeerRemoteAddr", "unknown")
+                        changes = int(float(metric["value"][1]))
+                        if changes >= 1:
+                            bgp_flaps.append({"peer": peer, "changes": changes})
+                            if changes >= 3:
+                                flap_detected = True
+
+            results.append(f"\n=== BGP FLAPPING ({device_ip}, last {time_range}) ===")
+            if bgp_flaps:
+                bgp_flaps.sort(key=lambda x: x["changes"], reverse=True)
+                for b_item in bgp_flaps[:20]:
+                    flag = "🔴 FLAPPING" if b_item["changes"] >= 3 else "🟡 Unstable" if b_item["changes"] >= 2 else "🟢 Minor"
+                    results.append(f"  BGP Peer {b_item['peer']}: {b_item['changes']} state changes [{flag}]")
+            else:
+                results.append("  ✅ No BGP peer flapping detected.")
+        except Exception as e:
+            results.append(f"\n=== BGP FLAPPING ===")
+            results.append(f"  ❌ Error querying Prometheus for BGP flaps: {e}")
+
+        # --- 3. Syslog-based flap detection (Loki) ---
+        try:
+            # Search for flap-related syslog messages
+            loki_query = f'{{job="syslog", host="{device_ip}"}} |~ "(?i)(flap|SNMP_TRAP_LINK|RPD_BGP_NEIGHBOR_STATE_CHANGED|LINK_DOWN|LINK_UP|carrier|link state)"'
+            resp = await client.get(f"{LOKI_URL}/loki/api/v1/query_range", params={
+                "query": loki_query,
+                "limit": 20,
+                "start": f"{int(__import__('time').time()) - _parse_time_range(time_range)}000000000",
+            })
+            data = resp.json()
+
+            results.append(f"\n=== SYSLOG FLAP EVENTS ({device_ip}, last {time_range}) ===")
+            if data.get("status") == "success" and data["data"]["result"]:
+                log_entries = []
+                for stream in data["data"]["result"]:
+                    for val in stream.get("values", []):
+                        log_entries.append(val[1])
+                if log_entries:
+                    for entry in log_entries[:15]:
+                        results.append(f"  {entry[:200]}")
+                    flap_detected = True
+                else:
+                    results.append("  ✅ No flap-related syslog entries found.")
+            else:
+                results.append("  ✅ No flap-related syslog entries found.")
+        except Exception as e:
+            results.append(f"\n=== SYSLOG FLAP EVENTS ===")
+            results.append(f"  ⚠️ Error querying Loki for flap logs: {e}")
+
+    # --- Summary ---
+    results.insert(0, f"--- Flapping History Report for {device_ip} (last {time_range}) ---")
+    results.append(f"\n--- SUMMARY ---")
+    if flap_detected:
+        results.append(f"⚠️ FLAPPING DETECTED on {device_ip}. Threshold (>=3 state changes) exceeded.")
+        results.append(f"ACTION: Log exact metrics to Jira via add_task_comment and escalate immediately.")
+    else:
+        results.append(f"✅ No significant flapping detected on {device_ip} in the last {time_range}.")
+
+    return "\n".join(results)
+
+
+def _parse_time_range(time_range: str) -> int:
+    """Parse Prometheus time range string to seconds (e.g., '1h' -> 3600)."""
+    try:
+        unit = time_range[-1].lower()
+        val = int(time_range[:-1])
+        multipliers = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+        return val * multipliers.get(unit, 3600)
+    except (ValueError, IndexError):
+        return 3600  # Default 1 hour
+
+
+@mcp.tool()
+def send_notification(audience_type: str, message: str) -> str:
+    """Send a notification to a specific audience channel via Slack.
+
+    Use this tool to notify L3 Human Engineers or Customers about incidents,
+    status updates, RCA reports, or escalations.
+
+    Args:
+        audience_type: Target audience. Must be one of:
+            - "L3_Engineer": Internal L3 NOC Human Engineers (Slack: #noc-l3-alerts)
+            - "Customer": Customer-facing channel (Slack: #all-customer-001)
+        message: The notification message content to send.
+    """
+    logger.info(f"Executing tool: send_notification to {audience_type}")
+
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        logger.warning(f"SLACK_BOT_TOKEN not set. Message logged: [{audience_type}] {message}")
+        return f"Warning: SLACK_BOT_TOKEN not configured. Message printed to logs:\n[{audience_type}] {message}"
+
+    aud = audience_type.strip().lower()
+    if aud == "customer":
+        channel = os.environ.get("SLACK_CHANNEL_CUSTOMER", "#all-customer-001")
+        prefix = "📢 *Customer Update:*\n"
+    elif aud == "l3_engineer":
+        channel = os.environ.get("SLACK_CHANNEL_ALERTS", "#noc-l3-alerts")
+        prefix = "🚨 *L3 Engineer Escalation:*\n"
+    else:
+        return f"Error: Unknown audience_type '{audience_type}'. Must be 'L3_Engineer' or 'Customer'."
+
+    url = "https://slack.com/api/chat.postMessage"
+    headers = {
+        "Authorization": f"Bearer {slack_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "channel": channel,
+        "text": f"{prefix}{message}"
+    }
+
+    try:
+        resp = req_lib.post(url, json=payload, headers=headers, timeout=10)
+        resp_json = resp.json()
+        if resp.status_code == 200 and resp_json.get("ok"):
+            logger.info(f"Notification sent to {channel} ({audience_type})")
+            return f"✅ Notification sent successfully to Slack channel {channel} ({audience_type})."
+        else:
+            error = resp_json.get("error", resp.text[:200])
+            return f"Failed to send Slack notification: {error}"
+    except Exception as e:
+        logger.error(f"send_notification exception: {e}")
+        return f"Error sending Slack notification: {e}"
+
+
 # ===================================================================
 # IPAM & NETWORK ASSET TOOLS (NetBox-like API response format)
 # ===================================================================
 
 @mcp.tool()
-def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> str:
+def query_netbox_inventory(
+    resource_type: str, 
+    calling_tenant: str,
+    query: Optional[str] = None
+) -> str:
     """Query NetBox inventory tables (tenants, devices, vlans, interfaces, ip-addresses).
     Returns a NetBox API-like JSON response structure.
     
     Args:
         resource_type: Type of resource to query. Allowed values: 'tenants', 'devices', 'vlans', 'interfaces', 'ip-addresses'.
+        calling_tenant: Slug of the tenant querying the resources (e.g. 'customer-a', 'customer-b', 'noc-ops'). Use 'noc-ops' if the query is for internal operations.
         query: Optional string to filter results (e.g. device name, IP address, VLAN ID, tenant name).
     """
-    logger.info(f"Executing tool: query_netbox_inventory for resource '{resource_type}' with query '{query}'")
+    logger.info(f"Executing tool: query_netbox_inventory for resource '{resource_type}' with query '{query}', calling_tenant '{calling_tenant}'")
     
     res_type = resource_type.lower().strip()
     if res_type in ["ip-address", "ip-addresses", "ip_addresses", "ip_address", "ips", "ip"]:
@@ -1426,14 +1575,20 @@ def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> s
         cur = conn.cursor()
         
         results = []
+        calling_tenant_clean = calling_tenant.lower().strip() if calling_tenant else "noc-ops"
+        if calling_tenant_clean in ["none", "null", "undefined", ""]:
+            calling_tenant_clean = "noc-ops"
         
         if res_type == "tenants":
-            sql = "SELECT id, name, slug, description FROM netbox_tenants"
+            sql = "SELECT id, name, slug, description FROM netbox_tenants WHERE 1=1"
             params = []
+            if calling_tenant_clean and calling_tenant_clean != "noc-ops":
+                sql += " AND slug = ?"
+                params.append(calling_tenant_clean)
             if query:
-                sql += " WHERE name LIKE ? OR slug LIKE ? OR description LIKE ?"
+                sql += " AND (name LIKE ? OR slug LIKE ? OR description LIKE ?)"
                 like_q = f"%{query}%"
-                params = [like_q, like_q, like_q]
+                params.extend([like_q, like_q, like_q])
             cur.execute(sql, params)
             for row in cur.fetchall():
                 results.append({
@@ -1449,13 +1604,17 @@ def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> s
                        t.name as tenant_name, t.slug as tenant_slug
                 FROM netbox_devices d
                 LEFT JOIN netbox_tenants t ON d.tenant_id = t.id
+                WHERE 1=1
             """
             params = []
+            if calling_tenant_clean and calling_tenant_clean != "noc-ops":
+                sql += " AND t.slug = ?"
+                params.append(calling_tenant_clean)
             if query:
-                sql += """ WHERE d.name LIKE ? OR d.model LIKE ? OR d.role LIKE ? 
-                           OR d.rack LIKE ? OR d.primary_ip LIKE ? OR t.name LIKE ?"""
+                sql += """ AND (d.name LIKE ? OR d.model LIKE ? OR d.role LIKE ? 
+                           OR d.rack LIKE ? OR d.primary_ip LIKE ? OR t.name LIKE ?)"""
                 like_q = f"%{query}%"
-                params = [like_q, like_q, like_q, like_q, like_q, like_q]
+                params.extend([like_q, like_q, like_q, like_q, like_q, like_q])
             cur.execute(sql, params)
             for row in cur.fetchall():
                 tenant_info = None
@@ -1481,8 +1640,12 @@ def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> s
                        t.name as tenant_name, t.slug as tenant_slug
                 FROM netbox_vlans v
                 LEFT JOIN netbox_tenants t ON v.tenant_id = t.id
+                WHERE 1=1
             """
             params = []
+            if calling_tenant_clean and calling_tenant_clean != "noc-ops":
+                sql += " AND t.slug = ?"
+                params.append(calling_tenant_clean)
             if query:
                 is_num = False
                 try:
@@ -1492,12 +1655,12 @@ def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> s
                     pass
                 
                 if is_num:
-                    sql += " WHERE v.vid = ? OR v.name LIKE ? OR t.name LIKE ?"
-                    params = [int_val, f"%{query}%", f"%{query}%"]
+                    sql += " AND (v.vid = ? OR v.name LIKE ? OR t.name LIKE ?)"
+                    params.extend([int_val, f"%{query}%", f"%{query}%"])
                 else:
-                    sql += " WHERE v.name LIKE ? OR t.name LIKE ? OR v.description LIKE ?"
+                    sql += " AND (v.name LIKE ? OR t.name LIKE ? OR v.description LIKE ?)"
                     like_q = f"%{query}%"
-                    params = [like_q, like_q, like_q]
+                    params.extend([like_q, like_q, like_q])
             cur.execute(sql, params)
             for row in cur.fetchall():
                 tenant_info = None
@@ -1520,16 +1683,26 @@ def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> s
             sql = """
                 SELECT i.id, i.name, i.device_id, i.enabled, i.mac_address, i.mode, i.untagged_vlan_id,
                        d.name as device_name,
-                       v.vid as vlan_vid, v.name as vlan_name
+                       v.vid as vlan_vid, v.name as vlan_name,
+                       i.connected_interface_id,
+                       conn_i.name as conn_interface_name,
+                       conn_d.id as conn_device_id,
+                       conn_d.name as conn_device_name
                 FROM netbox_interfaces i
                 LEFT JOIN netbox_devices d ON i.device_id = d.id
                 LEFT JOIN netbox_vlans v ON i.untagged_vlan_id = v.id
+                LEFT JOIN netbox_interfaces conn_i ON i.connected_interface_id = conn_i.id
+                LEFT JOIN netbox_devices conn_d ON conn_i.device_id = conn_d.id
+                WHERE 1=1
             """
             params = []
+            if calling_tenant_clean and calling_tenant_clean != "noc-ops":
+                sql += " AND d.tenant_id = (SELECT id FROM netbox_tenants WHERE slug = ?)"
+                params.append(calling_tenant_clean)
             if query:
-                sql += " WHERE i.name LIKE ? OR d.name LIKE ? OR i.mac_address LIKE ? OR i.mode LIKE ?"
+                sql += " AND (i.name LIKE ? OR d.name LIKE ? OR i.mac_address LIKE ? OR i.mode LIKE ?)"
                 like_q = f"%{query}%"
-                params = [like_q, like_q, like_q, like_q]
+                params.extend([like_q, like_q, like_q, like_q])
             cur.execute(sql, params)
             for row in cur.fetchall():
                 vlan_info = None
@@ -1539,6 +1712,16 @@ def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> s
                         "vid": row["vlan_vid"],
                         "name": row["vlan_name"]
                     }
+                connected_endpoint = None
+                if row["connected_interface_id"]:
+                    connected_endpoint = {
+                        "id": row["connected_interface_id"],
+                        "name": row["conn_interface_name"],
+                        "device": {
+                            "id": row["conn_device_id"],
+                            "name": row["conn_device_name"]
+                        }
+                    }
                 results.append({
                     "id": row["id"],
                     "name": row["name"],
@@ -1546,7 +1729,8 @@ def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> s
                     "enabled": bool(row["enabled"]),
                     "mac_address": row["mac_address"],
                     "mode": {"value": row["mode"], "label": row["mode"].capitalize()} if row["mode"] else None,
-                    "untagged_vlan": vlan_info
+                    "untagged_vlan": vlan_info,
+                    "connected_endpoint": connected_endpoint
                 })
                 
         elif res_type == "ip-addresses":
@@ -1559,12 +1743,16 @@ def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> s
                 LEFT JOIN netbox_tenants t ON ip.tenant_id = t.id
                 LEFT JOIN netbox_interfaces i ON ip.assigned_interface_id = i.id
                 LEFT JOIN netbox_devices d ON i.device_id = d.id
+                WHERE 1=1
             """
             params = []
+            if calling_tenant_clean and calling_tenant_clean != "noc-ops":
+                sql += " AND ip.tenant_id = (SELECT id FROM netbox_tenants WHERE slug = ?)"
+                params.append(calling_tenant_clean)
             if query:
-                sql += " WHERE ip.address LIKE ? OR ip.description LIKE ? OR t.name LIKE ? OR d.name LIKE ?"
+                sql += " AND (ip.address LIKE ? OR ip.description LIKE ? OR t.name LIKE ? OR d.name LIKE ?)"
                 like_q = f"%{query}%"
-                params = [like_q, like_q, like_q, like_q]
+                params.extend([like_q, like_q, like_q, like_q])
             cur.execute(sql, params)
             for row in cur.fetchall():
                 tenant_info = None
@@ -1603,181 +1791,7 @@ def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> s
         logger.error(f"Error executing query_netbox_inventory: {e}")
         return json.dumps({"error": str(e)}, indent=2)
 
-@mcp.tool()
-def query_vlan_ip(vlan_id: Optional[int] = None, subnet: Optional[str] = None) -> str:
-    """Query VLANs and IP addresses from the network assets.
-    Returns NetBox API-like JSON structures.
-    """
-    logger.info(f"Executing tool: query_vlan_ip vlan_id={vlan_id}, subnet={subnet}")
-    try:
-        conn = sqlite3.connect(NETWORK_ASSETS_DB)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        
-        vlans = []
-        ip_addresses = []
-        
-        vlan_sql = """
-            SELECT v.id, v.vid, v.name, v.status, v.tenant_id, v.description,
-                   t.name as tenant_name, t.slug as tenant_slug
-            FROM netbox_vlans v
-            LEFT JOIN netbox_tenants t ON v.tenant_id = t.id
-        """
-        vlan_params = []
-        if vlan_id is not None:
-            vlan_sql += " WHERE v.vid = ?"
-            vlan_params.append(vlan_id)
-        cur.execute(vlan_sql, vlan_params)
-        for row in cur.fetchall():
-            vlans.append({
-                "id": row["id"],
-                "vid": row["vid"],
-                "name": row["name"],
-                "status": {"value": row["status"], "label": row["status"].capitalize()},
-                "tenant": {
-                    "id": row["tenant_id"],
-                    "name": row["tenant_name"],
-                    "slug": row["tenant_slug"]
-                } if row["tenant_id"] else None,
-                "description": row["description"]
-            })
-            
-        ip_sql = """
-            SELECT ip.id, ip.address, ip.status, ip.assigned_interface_id, ip.tenant_id, ip.description,
-                   t.name as tenant_name, t.slug as tenant_slug,
-                   i.name as interface_name, i.device_id,
-                   d.name as device_name
-            FROM netbox_ip_addresses ip
-            LEFT JOIN netbox_tenants t ON ip.tenant_id = t.id
-            LEFT JOIN netbox_interfaces i ON ip.assigned_interface_id = i.id
-            LEFT JOIN netbox_devices d ON i.device_id = d.id
-        """
-        ip_params = []
-        if subnet is not None:
-            ip_sql += " WHERE ip.address LIKE ?"
-            ip_params.append(f"{subnet}%")
-        cur.execute(ip_sql, ip_params)
-        for row in cur.fetchall():
-            ip_addresses.append({
-                "id": row["id"],
-                "address": row["address"],
-                "status": {"value": row["status"], "label": row["status"].capitalize()},
-                "assigned_object": {
-                    "id": row["assigned_interface_id"],
-                    "name": row["interface_name"],
-                    "device": {
-                        "id": row["device_id"],
-                        "name": row["device_name"]
-                    }
-                } if row["assigned_interface_id"] else None,
-                "tenant": {
-                    "id": row["tenant_id"],
-                    "name": row["tenant_name"],
-                    "slug": row["tenant_slug"]
-                } if row["tenant_id"] else None,
-                "description": row["description"]
-            })
-            
-        conn.close()
-        return json.dumps({
-            "vlans": vlans,
-            "ip_addresses": ip_addresses
-        }, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.error(f"Error executing query_vlan_ip: {e}")
-        return json.dumps({"error": str(e)}, indent=2)
 
-@mcp.tool()
-def query_servers(hostname: Optional[str] = None, ip_address: Optional[str] = None) -> str:
-    """Query server devices from the network assets database.
-    Returns NetBox API-like JSON response structure.
-    """
-    logger.info(f"Executing tool: query_servers hostname={hostname}, ip_address={ip_address}")
-    try:
-        conn = sqlite3.connect(NETWORK_ASSETS_DB)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        
-        sql = """
-            SELECT d.id, d.name, d.model, d.role, d.rack, d.primary_ip, d.tenant_id,
-                   t.name as tenant_name, t.slug as tenant_slug
-            FROM netbox_devices d
-            LEFT JOIN netbox_tenants t ON d.tenant_id = t.id
-            WHERE d.role = 'Server'
-        """
-        params = []
-        if hostname:
-            sql += " AND d.name LIKE ?"
-            params.append(f"%{hostname}%")
-        if ip_address:
-            sql += " AND d.primary_ip LIKE ?"
-            params.append(f"%{ip_address}%")
-            
-        cur.execute(sql, params)
-        results = []
-        for row in cur.fetchall():
-            results.append({
-                "id": row["id"],
-                "name": row["name"],
-                "model": {"name": row["model"]},
-                "role": {"name": row["role"]},
-                "rack": {"name": row["rack"]},
-                "primary_ip": {"address": row["primary_ip"]} if row["primary_ip"] else None,
-                "tenant": {
-                    "id": row["tenant_id"],
-                    "name": row["tenant_name"],
-                    "slug": row["tenant_slug"]
-                } if row["tenant_id"] else None
-            })
-            
-        conn.close()
-        return json.dumps({
-            "count": len(results),
-            "results": results
-        }, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.error(f"Error executing query_servers: {e}")
-        return json.dumps({"error": str(e)}, indent=2)
-
-@mcp.tool()
-def query_customers(customer_id: Optional[int] = None, name_query: Optional[str] = None) -> str:
-    """Query customer tenants from the network assets database.
-    Returns NetBox API-like JSON response structure.
-    """
-    logger.info(f"Executing tool: query_customers customer_id={customer_id}, name_query={name_query}")
-    try:
-        conn = sqlite3.connect(NETWORK_ASSETS_DB)
-        conn.row_factory = sqlite3.Row
-        cur = conn.cursor()
-        
-        sql = "SELECT id, name, slug, description FROM netbox_tenants WHERE 1=1"
-        params = []
-        if customer_id is not None:
-            sql += " AND id = ?"
-            params.append(customer_id)
-        if name_query:
-            sql += " AND (name LIKE ? OR slug LIKE ?)"
-            like_q = f"%{name_query}%"
-            params.extend([like_q, like_q])
-            
-        cur.execute(sql, params)
-        results = []
-        for row in cur.fetchall():
-            results.append({
-                "id": row["id"],
-                "name": row["name"],
-                "slug": row["slug"],
-                "description": row["description"]
-            })
-            
-        conn.close()
-        return json.dumps({
-            "count": len(results),
-            "results": results
-        }, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.error(f"Error executing query_customers: {e}")
-        return json.dumps({"error": str(e)}, indent=2)
 
 def _query_impl_licenses(device_name: Optional[str] = None) -> str:
     try:
@@ -1822,15 +1836,6 @@ def query_licenses(device_name: Optional[str] = None) -> str:
     logger.info(f"Executing tool: query_licenses device_name={device_name}")
     return _query_impl_licenses(device_name)
 
-@mcp.tool()
-def query_device_licenses(device_name: Optional[str] = None) -> str:
-    """Query device license details from the database.
-    
-    Args:
-        device_name: Optional device name to filter by.
-    """
-    logger.info(f"Executing tool: query_device_licenses device_name={device_name}")
-    return _query_impl_licenses(device_name)
 
 @mcp.tool()
 def query_device_warranty(device_name: Optional[str] = None) -> str:
@@ -2081,16 +2086,74 @@ def _find_transition_id(issue_key: str, target_status: str) -> tuple[str | None,
     available = ", ".join(f'"{t["name"]}"' for t in transitions)
     return None, f"No transition matching '{target_status}' found for {issue_key}. Available transitions: {available}"
 
+def _sanitize_jira_summary(summary: str, issue_type: str = "Task") -> str:
+    """Helper function to format and prepend correct prefixes and enforce title length limits."""
+    # Truncate/sanitize to prevent exceeding Jira's limit.
+    # Jira's limit is 255 characters, let's keep it safe at 200 characters.
+    MAX_SUMMARY_LEN = 200
+    
+    summary = summary.strip()
+    
+    # Valid prefixes from user requirements (case-insensitive checks)
+    valid_prefixes = [
+        "[CONFIGURATION CHANGE]",
+        "[HARDWARE CHANGE]",
+        "[SOFTWARE CHANGE]",
+        "[OTHER CHANGE]",
+        "[OTHER CHANGE]",
+        "[SOFTWARE ISSUES]",
+        "[HARDWARE ISSUES]",
+        "[OTHER ISSUES]"
+    ]
+    
+    has_valid_prefix = False
+    matched_prefix = ""
+    for p in valid_prefixes:
+        if summary.upper().startswith(p.upper()):
+            has_valid_prefix = True
+            matched_prefix = p
+            break
+            
+    if not has_valid_prefix:
+        # Determine prefix based on issue_type or keywords in summary
+        is_change = issue_type.lower() in ["change request", "change", "changerequest"]
+        if is_change:
+            # For changes, default to CONFIGURATION CHANGE
+            prefix = "[CONFIGURATION CHANGE]"
+        else:
+            # Standardize issue prefix by content keywords
+            summary_lower = summary.lower()
+            if any(kw in summary_lower for kw in ["hardware", "cable", "port", "physical", "flapping", "interface"]):
+                prefix = "[HARDWARE ISSUES]"
+            elif any(kw in summary_lower for kw in ["software", "bgp", "ospf", "routing", "config", "ping", "packet loss", "loss"]):
+                prefix = "[SOFTWARE ISSUES]"
+            else:
+                prefix = "[OTHER ISSUES]"
+        
+        summary = f"{prefix} {summary}"
+    else:
+        # Normalize legacy [OTHER CHANGGE] typo to [OTHER CHANGE]
+        if matched_prefix.upper() == "[OTHER CHANGGE]":
+            summary = "[OTHER CHANGE]" + summary[len("[OTHER CHANGGE]"):]
+            
+    # Truncate summary if it exceeds the limit
+    if len(summary) > MAX_SUMMARY_LEN:
+        summary = summary[:MAX_SUMMARY_LEN - 3] + "..."
+        
+    return summary
+
 @mcp.tool()
 def create_jira_task(summary: str, description: str, issue_type: str = "Task") -> str:
     """Create a new ticket on the Jira KAN board. issue_type can be 'Task', 'Incident', 'Service Request', or 'Change Request'."""
     if not _is_jira_configured():
         return "Error: Jira is not configured. Missing JIRA_BASE_URL, JIRA_USER_EMAIL, or JIRA_API_TOKEN."
 
+    sanitized_summary = _sanitize_jira_summary(summary, issue_type)
+
     payload = {
         "fields": {
             "project": {"key": JIRA_PROJECT_KEY},
-            "summary": summary,
+            "summary": sanitized_summary,
             "description": _text_to_adf(description),
             "issuetype": {"name": issue_type},
         }
@@ -2106,7 +2169,7 @@ def create_jira_task(summary: str, description: str, issue_type: str = "Task") -
             return (
                 f"✅ Đã tạo ticket Jira: **{issue_key}**\n"
                 f"Link: {JIRA_BASE_URL}/browse/{issue_key}\n"
-                f"Summary: {summary}"
+                f"Summary: {sanitized_summary}"
             )
         else:
             error_detail = resp.text[:800]
@@ -2307,11 +2370,83 @@ if __name__ == "__main__":
         issue_key = issue.get("key", "UNKNOWN")
         fields = issue.get("fields", {})
 
-        # Check if this is an approval event
+        # Check if this is an approval or rework event
         status_name = fields.get("status", {}).get("name", "").lower()
+        
+        # Handle rework/changes-requested events from L3 Human
+        if any(kw in status_name for kw in ["rework", "changes requested", "rejected"]):
+            logger.info(f"Webhook for {issue_key}: L3 Human requested rework (status: '{status_name}')")
+            
+            # Fetch latest comments from Jira to get L3 feedback
+            l3_feedback = f"L3 Human changed ticket {issue_key} status to '{status_name}'."
+            try:
+                comments_url = f"{JIRA_BASE_URL}/rest/api/3/issue/{issue_key}/comment"
+                resp = req_lib.get(
+                    comments_url,
+                    auth=(JIRA_USER_EMAIL, JIRA_API_TOKEN),
+                    headers={"Accept": "application/json"},
+                    timeout=15,
+                    params={"orderBy": "-created", "maxResults": 1}
+                )
+                if resp.status_code == 200:
+                    comments = resp.json().get("comments", [])
+                    if comments:
+                        latest = comments[0]
+                        # Extract text from ADF comment body
+                        comment_text = ""
+                        body_doc = latest.get("body", {})
+                        if isinstance(body_doc, dict):
+                            for block in body_doc.get("content", []):
+                                for node in block.get("content", []):
+                                    if node.get("type") == "text":
+                                        comment_text += node.get("text", "")
+                                comment_text += "\n"
+                        if comment_text.strip():
+                            l3_feedback = f"L3 Human feedback on {issue_key}: {comment_text.strip()}"
+            except Exception as e:
+                logger.error(f"Failed to fetch Jira comments for rework: {e}")
+            
+            # Find session in Redis and re-trigger Supervisor
+            try:
+                for key in redis_client.scan_iter("state:*"):
+                    data_str = redis_client.get(key)
+                    if data_str:
+                        try:
+                            state_data = json.loads(data_str)
+                            if state_data.get("jira_issue_key") == issue_key:
+                                session_id = state_data.get("session_id", key.split("state:", 1)[1])
+                                
+                                # Get supervisor URL
+                                supervisor_url = redis_client.get("agent:url:supervisor-network-engineer-agent")
+                                if supervisor_url:
+                                    if supervisor_url.startswith('"') and supervisor_url.endswith('"'):
+                                        supervisor_url = supervisor_url[1:-1]
+                                    
+                                    rework_url = supervisor_url.rstrip("/") + "/invocations"
+                                    rework_resp = req_lib.post(rework_url, json={
+                                        "action": "l3_rework",
+                                        "session_id": session_id,
+                                        "l3_feedback": l3_feedback,
+                                        "sender": "l3-human-jira"
+                                    }, timeout=15)
+                                    logger.info(f"L3 rework triggered via Jira webhook for {issue_key}: HTTP {rework_resp.status_code}")
+                                    return JSONResponse({
+                                        "status": "rework_triggered",
+                                        "issue_key": issue_key,
+                                        "session_id": session_id
+                                    })
+                                else:
+                                    logger.error("Supervisor URL not found in Redis for rework trigger")
+                        except json.JSONDecodeError:
+                            continue
+            except Exception as e:
+                logger.error(f"Failed to find session for rework: {e}")
+            
+            return JSONResponse({"status": "rework_attempted", "issue_key": issue_key})
+        
         if "approved" not in status_name and "approve" not in status_name:
-            logger.info(f"Webhook for {issue_key}: status '{status_name}' is not an approval. Ignoring.")
-            return JSONResponse({"status": "ignored", "reason": "Not an approval event"})
+            logger.info(f"Webhook for {issue_key}: status '{status_name}' is not an approval or rework. Ignoring.")
+            return JSONResponse({"status": "ignored", "reason": "Not an approval or rework event"})
 
         # Extract device and config from description text (since custom fields are not configured)
         description_doc = fields.get("description", {})

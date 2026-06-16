@@ -124,8 +124,17 @@ def run_analytics_work(session_id: str):
     state["diagnostic_logs"].append(f"Analytics Agent started at {datetime.now().isoformat()}")
 
     # Prepare inputs for the agent
+    user_id = state.get('user_id', 'Unknown')
+    calling_tenant = "noc-ops"
+    if user_id:
+        if "customer-a" in user_id.lower():
+            calling_tenant = "customer-a"
+        elif "customer-b" in user_id.lower():
+            calling_tenant = "customer-b"
+
     agent_input = f"""Incident Symptoms: {state['symptoms']}
-Reporting User: {state.get('user_id', 'Unknown')}
+Reporting User: {user_id}
+Calling Tenant (slug): {calling_tenant}
 JIRA Ticket: {state.get('jira_issue_key', 'None')}
 Affected Entities: {state.get('affected_entities', [])}"""
 

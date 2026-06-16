@@ -18,7 +18,6 @@ from greennode_agentbase import (
 
 from system_prompt import SYSTEM_PROMPT
 from slack_bot import start_slack_bot, send_slack_message, SLACK_CHANNEL_ALERTS
-from email_gateway import start_email_gateway
 from telegram_bot import start_telegram_bot
 from markdown_converter import markdown_to_telegram_html
 
@@ -183,16 +182,12 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
                     SLACK_CHANNEL_ALERTS,
                     f"<!channel> 🚨 *CRITICAL P1 ALERT* - Core infrastructure incident detected!\n"
                     f"*Symptoms:* {state.get('symptoms', 'Unknown core link/BGP down')}\n"
-                    f"AI Agent is immediately escalating to L3 NOC Team. Direct intervention required!"
+                    f"AI Agent is running full diagnostic pipeline. L3 NOC Team standby for oversight."
                 )
                 state["p1_alert_sent"] = True
-                # Override next agent to escalate immediately
-                next_agent = "customer-advisory-agent"
-                reasoning = "SLA P1 detected - bypassing auto-remediation, escalating to L3 human engineers."
-            else:
-                # Escalation has already run and triggered callback. Conclude session.
-                next_agent = "FINISH"
-                reasoning = "SLA P1 escalation completed. Concluding supervisor loop."
+                # P1 does NOT override routing — workflow continues normally
+                # The LLM routing decision is preserved (next_agent stays as decided by the router)
+                state["diagnostic_logs"].append("P1 CRITICAL: Slack alarm sent to L3 Human Engineers. Full pipeline continues.")
             
         state["diagnostic_logs"].append(f"Supervisor decision: Route to {next_agent} (Intent: {intent}, Priority: {priority}). Reason: {reasoning}")
         state["current_assignee"] = next_agent
@@ -322,6 +317,36 @@ def handler(payload: dict, context: RequestContext) -> dict:
             "timestamp": datetime.now().isoformat()
         }
 
+    # Handle L3 Human rework request (from Slack "Request Changes" or Jira comment webhook)
+    elif payload.get("action") == "l3_rework":
+        session_id_rw = payload.get("session_id")
+        l3_feedback = payload.get("l3_feedback", "L3 Human requested changes. Check Jira comments for details.")
+        sender = payload.get("sender", "l3-human")
+        logger.info(f"L3 REWORK request for session {session_id_rw} from {sender}")
+        
+        # Inject L3 feedback into session state and re-route to Senior Network Engineer
+        state = StateManager.get_state(session_id_rw)
+        if state:
+            state["diagnostic_logs"].append(f"L3 HUMAN FEEDBACK: {l3_feedback}")
+            state["diagnostic_logs"].append(f"REWORK REQUESTED BY L3 — Re-routing to Senior Network Engineer for adjustments.")
+            state["current_assignee"] = "senior-network-engineer-agent"
+            # Reset loop count to allow the agent to process the rework
+            state["loop_count"] = max(0, state.get("loop_count", 0) - 1)
+            StateManager.save_state(session_id_rw, state)
+            
+            # Re-trigger supervisor loop which will route to senior-network-engineer-agent
+            threading.Thread(target=run_supervisor_loop, args=(session_id_rw,), daemon=True).start()
+            return {
+                "status": "success",
+                "message": f"L3 rework triggered for session {session_id_rw}",
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            return {
+                "status": "error",
+                "message": f"Session {session_id_rw} not found in Redis"
+            }
+
     # Handle standard chat messages
     else:
         message = payload.get("message", "Hello")
@@ -347,14 +372,7 @@ slack_thread = threading.Thread(
 slack_thread.start()
 logger.info("Slack bot thread launched")
 
-# --- Email Gateway Launch ---
-email_thread = threading.Thread(
-    target=start_email_gateway,
-    args=(process_message,),
-    daemon=True,
-)
-email_thread.start()
-logger.info("Email Gateway thread launched")
+
 
 # --- Telegram Bot Launch ---
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")

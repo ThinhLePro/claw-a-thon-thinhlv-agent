@@ -174,8 +174,8 @@ def capture_state_snapshot(device_ip: str) -> str:
     import datetime
 
     alarms = call_mcp_tool(mcp_server_url, "check_device_alarms", {"device_ip": device_ip})
-    interfaces = call_mcp_tool(mcp_server_url, "view_network_status", {"device_ip": device_ip, "command": "show interfaces terse"})
-    bgp = call_mcp_tool(mcp_server_url, "view_network_status", {"device_ip": device_ip, "command": "show bgp neighbor"})
+    interfaces = call_mcp_tool(mcp_server_url, "execute_device_command", {"device_ip": device_ip, "command": "show interfaces terse"})
+    bgp = call_mcp_tool(mcp_server_url, "execute_device_command", {"device_ip": device_ip, "command": "show bgp neighbor"})
     
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     snapshot_filename = f"snapshot_{device_ip}_{timestamp}.txt"

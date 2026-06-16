@@ -1238,7 +1238,7 @@ function analyzeRequest() {
         priority = 'Cao';
         priorityClass = 'badge-danger';
         agent = 'analytics-network-engineer-agent';
-        jiraTitle = '[Incident] srx-core-01: Packet loss on peering link';
+        jiraTitle = '[SOFTWARE ISSUES] srx-core-01: Packet loss on peering link';
         jiraDesc = `Ticket created automatically from client request.\n\nDescription: ${text}\n\nRecommended worker action: Verify peering status and links on srx-core-01.`;
         confidence = 98;
     }
@@ -1249,7 +1249,7 @@ function analyzeRequest() {
         priority = 'Khẩn cấp';
         priorityClass = 'badge-danger';
         agent = 'expert-engineer-agent';
-        jiraTitle = '[Service Request] qfx-leaf-02: Export interface ge-0/0/1 config';
+        jiraTitle = '[SOFTWARE ISSUES] qfx-leaf-02: Export interface ge-0/0/1 config';
         jiraDesc = `Ticket created automatically from client request.\n\nDescription: ${text}\n\nRecommended worker action: Execute show configuration command on qfx-leaf-02 ge-0/0/1 and export log.`;
         confidence = 97;
     }
@@ -1260,7 +1260,7 @@ function analyzeRequest() {
         priority = 'Trung bình';
         priorityClass = 'badge-warning';
         agent = 'customer-advisory-agent';
-        jiraTitle = '[Change Request] EX-Switch: Scheduled maintenance ticket #1102';
+        jiraTitle = '[OTHER CHANGGE] EX-Switch: Scheduled maintenance ticket #1102';
         jiraDesc = `Ticket created automatically from client request.\n\nDescription: ${text}\n\nRecommended worker action: Draft maintenance ticket, contact L3 engineer for coordinates, notify client.`;
         confidence = 96;
     }
@@ -1292,7 +1292,7 @@ function analyzeRequest() {
             device = 'Unknown';
         }
 
-        jiraTitle = `[NOC Task] ${device !== 'Unknown' ? device : 'System'}: Customer request processing`;
+        jiraTitle = `[OTHER ISSUES] ${device !== 'Unknown' ? device : 'System'}: Customer request processing`;
         jiraDesc = `Auto-drafted NOC ticket.\n\nDescription: ${text}`;
     }
 

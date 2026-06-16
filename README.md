@@ -26,12 +26,12 @@ The system transitions from a single agent design to a team of 4 specialized AI 
  │                  │                        │                        │                   │
  │                  ▼                        ▼                        ▼                   │
  │       ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐       │
- │       │   Triage/Analytics   │ │    Expert Engineer   │ │  Customer Advisory   │       │
+ │       │   Triage/Analytics   │ │ Senior Network Eng.  │ │  Customer Advisory   │       │
  │       │       Agent          │ │        Agent           │ │        Agent           │       │
- │       │ [analytics-network-  │ │  [expert-engineer-   │ │ [customer-advisory-  │       │
- │       │   engineer-agent]    │ │       agent]         │ │       agent]         │       │
+ │       │ [analytics-network-  │ │[senior-network-      │ │ [customer-advisory-  │       │
+ │       │   engineer-agent]    │ │  engineer-agent]     │ │       agent]         │       │
  │       │  - Filters alerts    │ │ - Runs diagnostics   │ │ - Prepares RCA/SOP   │       │
- │       │  - Incident triage   │ │ - Executes changes   │ │ - L3 notifications   │       │
+ │       │  - Incident triage   │ │ - Proposes changes   │ │ - L3 notifications   │       │
  │       │  - Creates Jira task │ │ - NETCONF CLI tools  │ │ - Closes Jira task   │       │
  │       └──────────┬───────────┘ └──────────┬───────────┘ └──────────┬───────────┘       │
  └──────────────────┼────────────────────────┼────────────────────────┼───────────────────┘
@@ -62,9 +62,9 @@ The system transitions from a single agent design to a team of 4 specialized AI 
 2.  **Triage/Analytics Agent** (`analytics-network-engineer-agent`):
     *   **Role**: Incident Triager.
     *   **Responsibility**: Validates alerts, reviews hardware/software states, checks for link flapping, and creates the mandatory Jira ticket on the KAN board.
-3.  **Expert Engineer Agent** (`expert-engineer-agent`):
-    *   **Role**: Deep Diagnostician & Executor.
-    *   **Responsibility**: Connects to datacenter switches/routers using NETCONF MCP tools, runs complex troubleshooting workflows, designs configuration changes, and updates Jira with detailed technical notes.
+3.  **Senior Network Engineer Agent** (`senior-network-engineer-agent`):
+    *   **Role**: Deep Diagnostician & Config Proposer.
+    *   **Responsibility**: Connects to datacenter switches/routers using NETCONF MCP tools, runs complex troubleshooting workflows, proposes configuration changes (subject to L3 Human CAB approval), and updates Jira with detailed technical notes. Operates with a Senior mindset — always evaluates blast radius, HA topology, and consults L3 Human for uncertain decisions.
 4.  **Customer Advisory Agent** (`customer-advisory-agent`):
     *   **Role**: L3 Engineer Escalation & Customer Communicator.
     *   **Responsibility**: Reviews the resolved incident logs, drafts customer-facing reports (Root Cause Analysis - RCA), and prepares self-help guidelines. Crucially, it manages two distinct notification channels: replying contextually to the **Customer** session, and escalating unresolved or limit-exceeded incidents to the internal **L3 Engineer** group via Slack. Finally, it transitions the Jira ticket to **DONE**.
@@ -108,9 +108,9 @@ claw-a-thon-thinhlv-agent/
 │   ├── agent_tools.py                     # Custom tools for alert analysis
 │   └── Dockerfile
 │
-├── expert-engineer-agent/                 # ⚙️ Deep Diagnostic & Config Executor
+├── senior-network-engineer-agent/          # ⚙️ Deep Diagnostic & Config Proposer
 │   ├── main.py                            # Agent loop
-│   ├── system_prompt.py                   # Expert troubleshooting guidelines
+│   ├── system_prompt.py                   # Senior engineer guidelines + pre-flight checklist
 │   ├── agent_tools.py                     # Wrapper for Netmiko/NETCONF tools
 │   └── Dockerfile
 │
@@ -158,7 +158,7 @@ We provide a deployment script to build, push, deploy, and register all 4 agents
 ```
 
 The `deploy_all.sh` script will:
-*   Build Docker images for `supervisor-network-engineer-agent`, `analytics-network-engineer-agent`, `expert-engineer-agent`, and `customer-advisory-agent`.
+*   Build Docker images for `supervisor-network-engineer-agent`, `analytics-network-engineer-agent`, `senior-network-engineer-agent`, and `customer-advisory-agent`.
 *   Push images to your VNG Cloud Container Registry.
 *   Deploy them as GreenNode AgentBase runtimes.
 *   Query the dynamic endpoint URLs and register them in Redis.
@@ -216,7 +216,7 @@ The workers use standard tools to interact with Jira REST API v3:
 [Supervisor] ◄─────────────────────────────────────────────────────── [IN_PROGRESS]
       │
       ▼
-[Expert Agent] ──► (Run Diagnostics/Fixes via MCP)
+[Senior Network Engineer] ──► (Run Diagnostics/Fixes via MCP)
       │
       ├─► (Configuration Change Needed) ──► (Show Config Diff) ──► [WAITING FOR APPROVAL]
       │                                                                     │
@@ -254,21 +254,15 @@ The worker agents are equipped with Slack utility and web-reading tools to lever
 
 ---
 
-## Security Notes
+## Security Notes & Tenant Isolation (ISO 27001)
 
 *   **Secrets & Credentials**: Always keep your environment-specific passwords, Slack tokens, and Jira API Tokens in `.env` files. Ensure they are gitignored and never hardcoded in source files.
 *   **Webhook Signing**: Simulate JIRA approvals locally using the HMAC SHA256 signatures helper script [approve_ticket.py](file:///home/thinhle/claw-a-thon-thinhlv-agent/shared/approve_ticket.py).
+*   **Tenant Isolation & Data Leak Prevention**: To comply with ISO 27001 security standards, the system implements a strict database-level and prompt-level isolation layer:
+    *   **Mandatory Parameter**: The `query_netbox_inventory` tool requires a `calling_tenant` slug parameter (e.g. `'customer-a'`, `'customer-b'`, or `'noc-ops'`).
+    *   **SQL Filter**: The MCP server automatically scopes queries to the `calling_tenant` (unless it is `'noc-ops'`), filtering out other customer environments.
+    *   **Prompt Enforcements**: System prompts strictly forbid worker agents from diagnosing, executing router commands, or mentioning details of other customer environments if they are queried about an unauthorized IP. Any cross-tenant query immediately halts diagnostics and returns a safe "not found/unauthorized" response.
 
----
-
-## Email Inbound Gateway
-
-The Supervisor Agent includes an **Email Gateway** (`email_gateway.py`) that runs in a background thread:
-*   **IMAP Polling**: Polls the inbox of `claw.a.thon.noc.agent.greennode01@gmail.com` every 10 seconds for unread emails.
-*   **De-duplication & Loop Prevention**: Uses Redis cache to deduplicate emails using `Message-ID` with a 30-day TTL, and filters out auto-replies or bulk mail (precedence header).
-*   **Body Parsing**: Extracts plain/HTML body elements and cleans signature/reply history via `email_reply_parser` and `BeautifulSoup`.
-*   **Rate Limiting**: Restricts users to a maximum of 5 requests per minute using Redis counters.
-*   **SMTP Replies**: Automatically drafts and emails responses back to the sender under the referenced email thread.
 
 ---
 

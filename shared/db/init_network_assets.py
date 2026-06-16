@@ -5,6 +5,30 @@ import sqlite3
 DB_PATH = os.path.join(os.path.dirname(__file__), "network_assets.db")
 DEVICES_JSON_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "devices.json")
 
+def link_interfaces(cur, dev1, port1, dev2, port2):
+    """Helper to link two interfaces bidsirectionally via connected_interface_id."""
+    cur.execute("""
+        SELECT i.id FROM netbox_interfaces i 
+        JOIN netbox_devices d ON i.device_id = d.id 
+        WHERE d.name = ? AND i.name = ?
+    """, (dev1, port1))
+    row1 = cur.fetchone()
+    
+    cur.execute("""
+        SELECT i.id FROM netbox_interfaces i 
+        JOIN netbox_devices d ON i.device_id = d.id 
+        WHERE d.name = ? AND i.name = ?
+    """, (dev2, port2))
+    row2 = cur.fetchone()
+    
+    if row1 and row2:
+        id1 = row1[0]
+        id2 = row2[0]
+        cur.execute("UPDATE netbox_interfaces SET connected_interface_id = ? WHERE id = ?", (id2, id1))
+        cur.execute("UPDATE netbox_interfaces SET connected_interface_id = ? WHERE id = ?", (id1, id2))
+    else:
+        print(f"Warning: Could not link {dev1} {port1} <---> {dev2} {port2} (Interface not found)")
+
 def main():
     print(f"Loading device profiles from {DEVICES_JSON_PATH}...")
     if not os.path.exists(DEVICES_JSON_PATH):
@@ -74,8 +98,10 @@ def main():
         mac_address TEXT,
         mode TEXT,
         untagged_vlan_id INTEGER,
+        connected_interface_id INTEGER,
         FOREIGN KEY (device_id) REFERENCES netbox_devices(id),
-        FOREIGN KEY (untagged_vlan_id) REFERENCES netbox_vlans(id)
+        FOREIGN KEY (untagged_vlan_id) REFERENCES netbox_vlans(id),
+        FOREIGN KEY (connected_interface_id) REFERENCES netbox_interfaces(id)
     )
     """)
 
@@ -125,7 +151,7 @@ def main():
     ]
     cur.executemany("INSERT INTO netbox_tenants VALUES (?,?,?,?)", tenants)
 
-    # 2. VLANs
+    # 2. VLANs (IPAM)
     vlans = [
         (1, 100, "VLAN_100_PROD_A", "active", 2, "Production VLAN for Customer A"),
         (2, 101, "VLAN_101_DB_A", "active", 2, "Database private network for Customer A"),
@@ -145,22 +171,23 @@ def main():
     ip_id = 1
     license_id = 1
     warranty_id = 1
-    
+
+    # Add active lab devices from devices.json
     for dev_name, info in devices_data.items():
         role = info.get("role", "Switch")
         model = info.get("model", "Unknown")
         primary_ip = info.get("ip")
         vendor = info.get("vendor", "juniper").lower()
         
-        # Assign tenant
-        if role == "Server":
-            tenant_id = 2  # Customer A
+        # Determine tenant assignment based on name and role
+        if dev_name in ["noc-portal-app", "net-monitor"]:
+            tenant_id = 4  # NOC Operations Team
         elif "VNPT" in dev_name:
             tenant_id = 3  # Customer B
         else:
-            tenant_id = 4  # NOC Ops
+            tenant_id = 4  # NOC Operations Team
             
-        # Assign rack
+        # Determine rack assignment
         if role == "Server":
             rack = "Rack-C01"
         elif "Spine" in role:
@@ -172,8 +199,7 @@ def main():
             
         device_records.append((device_id, dev_name, model, role, rack, primary_ip, tenant_id))
         
-        # Create interfaces
-        # 1. Management interface
+        # Create management interface
         if role == "Server":
             mgmt_if_name = "eth0"
         elif vendor == "juniper":
@@ -182,9 +208,9 @@ def main():
             mgmt_if_name = "em0"
             
         mac_addr = f"00:50:56:{device_id:02x}:11:aa"
-        interface_records.append((interface_id, mgmt_if_name, device_id, 1, mac_addr, "access", 4)) # mgmt is untagged vlan 4 (MGMT)
+        interface_records.append((interface_id, mgmt_if_name, device_id, 1, mac_addr, "access", 4, None)) # mgmt vlan 4 (vid 999)
         
-        # 2. IP Address for management interface
+        # IP Address for management interface
         if primary_ip:
             ip_address = primary_ip if "/" in primary_ip else f"{primary_ip}/24"
             ip_records.append((ip_id, ip_address, "active", interface_id, tenant_id, f"{dev_name} Management IP"))
@@ -192,20 +218,48 @@ def main():
             
         interface_id += 1
         
-        # Let's add some more traffic interfaces per device type
+        # Add traffic interfaces per device type
         if "Spine" in role:
-            for port_idx in range(1, 5):
+            # CLOS-3 Gateways: Spines host the L3 IRB Gateways for Customer VLANs (VLAN 100, 101, 200)
+            irb_interfaces = [
+                ("irb.100", 1, 2, f"10.100.0.{1 if '01' in dev_name else 2}/24", "Customer A VLAN 100 Gateway"),
+                ("irb.101", 2, 2, f"10.101.0.{1 if '01' in dev_name else 2}/24", "Customer A VLAN 101 Gateway"),
+                ("irb.200", 3, 3, f"10.200.0.{1 if '01' in dev_name else 2}/24", "Customer B VLAN 200 Gateway")
+            ]
+            for irb_name, vlan_idx, vlan_tenant, irb_ip, irb_desc in irb_interfaces:
+                interface_records.append((interface_id, irb_name, device_id, 1, None, None, vlan_idx, None))
+                ip_records.append((ip_id, irb_ip, "active", interface_id, vlan_tenant, irb_desc))
+                interface_id += 1
+                ip_id += 1
+            
+            # Physical uplinks to Leafs
+            for port_idx in range(1, 10):
                 traffic_if_name = f"et-0/0/{port_idx}"
                 traffic_mac = f"00:50:56:{device_id:02x}:22:{port_idx:02x}"
-                interface_records.append((interface_id, traffic_if_name, device_id, 1, traffic_mac, "trunk", None))
+                interface_records.append((interface_id, traffic_if_name, device_id, 1, traffic_mac, "trunk", None, None))
                 interface_id += 1
+                
         elif "Leaf" in role or "Switch" in role or "ToR" in role:
+            # Physical uplinks to Spines (et-0/0/1 to et-0/0/4 for dual-homed LACP bonding to 2 Spines)
+            for port_idx in range(1, 5):
+                uplink_name = f"et-0/0/{port_idx}"
+                uplink_mac = f"00:50:56:{device_id:02x}:22:{port_idx:02x}"
+                interface_records.append((interface_id, uplink_name, device_id, 1, uplink_mac, "trunk", None, None))
+                interface_id += 1
+                
+            # Access ports to Servers (ge-0/0/1 to ge-0/0/9)
             for port_idx in range(1, 10):
                 traffic_if_name = f"ge-0/0/{port_idx}"
                 traffic_mac = f"00:50:56:{device_id:02x}:33:{port_idx:02x}"
-                # Let's tag some interfaces with customer VLANs
-                untagged_vlan = 1 if port_idx <= 4 else (2 if port_idx <= 7 else 3)
-                interface_records.append((interface_id, traffic_if_name, device_id, 1, traffic_mac, "access", untagged_vlan))
+                # Distribute interfaces across tenant VLANs
+                if port_idx <= 3:
+                    untagged_vlan = 1  # VLAN 100 (Customer A)
+                elif port_idx <= 6:
+                    untagged_vlan = 2  # VLAN 101 (Customer A)
+                else:
+                    untagged_vlan = 3  # VLAN 200 (Customer B)
+                
+                interface_records.append((interface_id, traffic_if_name, device_id, 1, traffic_mac, "access", untagged_vlan, None))
                 interface_id += 1
                 
         # Generate licenses
@@ -234,16 +288,108 @@ def main():
         
         device_id += 1
 
+    # Add custom Customer Servers (Dual-homed eth0 & eth1 for LACP bonding)
+    custom_servers = [
+        # Customer A Web servers (VLAN 100)
+        {"name": "customer-a-web-01", "ip": "10.100.0.50", "tenant_id": 2, "rack": "Rack-C02", "vlan": 1, "desc": "Customer A Production Web Server 01"},
+        {"name": "customer-a-web-02", "ip": "10.100.0.51", "tenant_id": 2, "rack": "Rack-C02", "vlan": 1, "desc": "Customer A Production Web Server 02"},
+        # Customer A DB servers (VLAN 101)
+        {"name": "customer-a-db-01", "ip": "10.101.0.60", "tenant_id": 2, "rack": "Rack-C02", "vlan": 2, "desc": "Customer A Database Server 01"},
+        # Customer B Web servers (VLAN 200)
+        {"name": "customer-b-web-01", "ip": "10.200.0.70", "tenant_id": 3, "rack": "Rack-C03", "vlan": 3, "desc": "Customer B Frontend Web Server 01"},
+        {"name": "customer-b-app-01", "ip": "10.200.0.80", "tenant_id": 3, "rack": "Rack-C03", "vlan": 3, "desc": "Customer B Application Server 01"},
+    ]
+
+    for srv in custom_servers:
+        device_records.append((device_id, srv["name"], "Standard PC", "Server", srv["rack"], srv["ip"], srv["tenant_id"]))
+        
+        # Dual-homed: Create eth0 & eth1
+        mac_addr_0 = f"00:50:56:{device_id:02x}:11:bb"
+        mac_addr_1 = f"00:50:56:{device_id:02x}:22:bb"
+        interface_records.append((interface_id, "eth0", device_id, 1, mac_addr_0, "access", srv["vlan"], None))
+        
+        # Assign IP address to eth0 (LACP bond primary)
+        ip_addr_with_mask = f"{srv['ip']}/24"
+        ip_records.append((ip_id, ip_addr_with_mask, "active", interface_id, srv["tenant_id"], srv["desc"]))
+        interface_id += 1
+        ip_id += 1
+        
+        # Assign eth1
+        interface_records.append((interface_id, "eth1", device_id, 1, mac_addr_1, "access", srv["vlan"], None))
+        interface_id += 1
+        
+        # Generate Ubuntu license
+        lic_key = f"UBUNTU-SUPPORT-{device_id:04d}"
+        features = "ESM Security Patches 24/7 Support"
+        license_records.append((license_id, srv["name"], lic_key, features, "2029-06-30", "ACTIVE"))
+        
+        # Generate Warranty
+        serial = f"UB{device_id:03d}X{device_id*13:03d}"
+        warranty_records.append((warranty_id, srv["name"], serial, "Standard NBD Hardware Replacement", "2022-01-01", "2027-01-01", "ACTIVE"))
+
+        device_id += 1
+        license_id += 1
+        warranty_id += 1
+
     # Bulk insert generated records
     cur.executemany("INSERT INTO netbox_devices VALUES (?,?,?,?,?,?,?)", device_records)
-    cur.executemany("INSERT INTO netbox_interfaces VALUES (?,?,?,?,?,?,?)", interface_records)
+    cur.executemany("INSERT INTO netbox_interfaces VALUES (?,?,?,?,?,?,?,?)", interface_records)
     cur.executemany("INSERT INTO netbox_ip_addresses VALUES (?,?,?,?,?,?)", ip_records)
     cur.executemany("INSERT INTO licenses VALUES (?,?,?,?,?,?)", license_records)
     cur.executemany("INSERT INTO device_warranty VALUES (?,?,?,?,?,?,?)", warranty_records)
+    
+    # Save base records
+    conn.commit()
 
+    # 3. Create Physical Cables / Topology Links (link_interfaces)
+    print("Wiring spine-to-leaf trunk connections (CLOS architecture)...")
+    # Leaf 01 links to Spine 01 (2 links LACP) and Spine 02 (2 links LACP)
+    link_interfaces(cur, "LAB_LEAF.01", "et-0/0/1", "LAB_SPINE.01", "et-0/0/1")
+    link_interfaces(cur, "LAB_LEAF.01", "et-0/0/2", "LAB_SPINE.01", "et-0/0/2")
+    link_interfaces(cur, "LAB_LEAF.01", "et-0/0/3", "LAB_SPINE.02", "et-0/0/1")
+    link_interfaces(cur, "LAB_LEAF.01", "et-0/0/4", "LAB_SPINE.02", "et-0/0/2")
+
+    # Leaf 02 links to Spine 01 (2 links LACP) and Spine 02 (2 links LACP)
+    link_interfaces(cur, "LAB_LEAF.02", "et-0/0/1", "LAB_SPINE.01", "et-0/0/3")
+    link_interfaces(cur, "LAB_LEAF.02", "et-0/0/2", "LAB_SPINE.01", "et-0/0/4")
+    link_interfaces(cur, "LAB_LEAF.02", "et-0/0/3", "LAB_SPINE.02", "et-0/0/3")
+    link_interfaces(cur, "LAB_LEAF.02", "et-0/0/4", "LAB_SPINE.02", "et-0/0/4")
+
+    # ToR Switch links to Spines
+    link_interfaces(cur, "LAB-EX4400-TOR", "et-0/0/1", "LAB_SPINE.01", "et-0/0/5")
+    link_interfaces(cur, "LAB-EX4400-TOR", "et-0/0/2", "LAB_SPINE.02", "et-0/0/5")
+    link_interfaces(cur, "LAB-VCEX4600-TOR-2", "et-0/0/1", "LAB_SPINE.01", "et-0/0/6")
+    link_interfaces(cur, "LAB-VCEX4600-TOR-2", "et-0/0/2", "LAB_SPINE.02", "et-0/0/6")
+
+    print("Wiring server-to-leaf LACP/bonding dual-homed connections...")
+    # Customer A Server 1 connects to Leaf 1 (ge-0/0/1) and Leaf 2 (ge-0/0/1)
+    link_interfaces(cur, "customer-a-web-01", "eth0", "LAB_LEAF.01", "ge-0/0/1")
+    link_interfaces(cur, "customer-a-web-01", "eth1", "LAB_LEAF.02", "ge-0/0/1")
+
+    # Customer A Server 2 connects to Leaf 1 (ge-0/0/2) and Leaf 2 (ge-0/0/2)
+    link_interfaces(cur, "customer-a-web-02", "eth0", "LAB_LEAF.01", "ge-0/0/2")
+    link_interfaces(cur, "customer-a-web-02", "eth1", "LAB_LEAF.02", "ge-0/0/2")
+
+    # Customer A DB Server connects to Leaf 1 (ge-0/0/3) and Leaf 2 (ge-0/0/3)
+    link_interfaces(cur, "customer-a-db-01", "eth0", "LAB_LEAF.01", "ge-0/0/3")
+    link_interfaces(cur, "customer-a-db-01", "eth1", "LAB_LEAF.02", "ge-0/0/3")
+
+    # Customer B Web Server connects to Leaf 1 (ge-0/0/4) and Leaf 2 (ge-0/0/4)
+    link_interfaces(cur, "customer-b-web-01", "eth0", "LAB_LEAF.01", "ge-0/0/4")
+    link_interfaces(cur, "customer-b-web-01", "eth1", "LAB_LEAF.02", "ge-0/0/4")
+
+    # Customer B App Server connects to Leaf 1 (ge-0/0/5) and Leaf 2 (ge-0/0/5)
+    link_interfaces(cur, "customer-b-app-01", "eth0", "LAB_LEAF.01", "ge-0/0/5")
+    link_interfaces(cur, "customer-b-app-01", "eth1", "LAB_LEAF.02", "ge-0/0/5")
+
+    # NOC internal servers (noc-portal-app & net-monitor) connect to Leaf 1 ge-0/0/8 and ge-0/0/9
+    link_interfaces(cur, "noc-portal-app", "eth0", "LAB_LEAF.01", "ge-0/0/8")
+    link_interfaces(cur, "net-monitor", "eth0", "LAB_LEAF.01", "ge-0/0/9")
+
+    # Save cabling
     conn.commit()
     conn.close()
-    print("Database successfully initialized with dynamic device data!")
+    print("Database successfully initialized with CLOS topology, Spine L3 gateways, and dual-homed servers!")
 
 if __name__ == "__main__":
     main()

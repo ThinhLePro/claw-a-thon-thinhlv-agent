@@ -62,7 +62,7 @@ def send_approval_request(issue_key, reason, diff_text):
                     "type": "button",
                     "text": {
                         "type": "plain_text",
-                        "text": "Approve"
+                        "text": "✅ Approve"
                     },
                     "style": "primary",
                     "value": issue_key,
@@ -72,11 +72,20 @@ def send_approval_request(issue_key, reason, diff_text):
                     "type": "button",
                     "text": {
                         "type": "plain_text",
-                        "text": "Reject"
+                        "text": "❌ Reject"
                     },
                     "style": "danger",
                     "value": issue_key,
                     "action_id": "reject_change"
+                },
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "🔄 Request Changes"
+                    },
+                    "value": issue_key,
+                    "action_id": "request_changes"
                 }
             ]
         }
@@ -183,6 +192,85 @@ if app:
         except Exception as e:
             logger.error(f"Failed to trigger MCP approval webhook: {e}")
             return False
+
+    def _find_session_by_jira_key(issue_key):
+        """Search Redis for the session that has the given jira_issue_key."""
+        try:
+            import redis as redis_lib
+            redis_host = os.environ.get("REDIS_HOST", "49.213.77.222")
+            redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+            r = redis_lib.Redis(host=redis_host, port=redis_port, decode_responses=True)
+            
+            for key in r.scan_iter("state:*"):
+                data = r.get(key)
+                if data:
+                    try:
+                        state = json.loads(data)
+                        if state.get("jira_issue_key") == issue_key:
+                            return state.get("session_id", key.split("state:", 1)[1])
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            logger.error(f"Failed to search Redis for jira key {issue_key}: {e}")
+        return None
+
+    def _trigger_l3_rework(issue_key, l3_feedback="L3 Human requested changes on this proposal."):
+        """Find the session for this Jira issue and trigger l3_rework on the Supervisor."""
+        session_id = _find_session_by_jira_key(issue_key)
+        if not session_id:
+            logger.error(f"No session found for Jira issue {issue_key}")
+            return False
+        
+        # Get supervisor URL from Redis
+        try:
+            import redis as redis_lib
+            redis_host = os.environ.get("REDIS_HOST", "49.213.77.222")
+            redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+            r = redis_lib.Redis(host=redis_host, port=redis_port, decode_responses=True)
+            supervisor_url = r.get("agent:url:supervisor-network-engineer-agent")
+            
+            if not supervisor_url:
+                # Fallback: call process_message_fn directly if we're in-process
+                logger.warning("Supervisor URL not in Redis, attempting local rework injection.")
+                return False
+            
+            url = supervisor_url.rstrip("/") + "/invocations"
+            resp = requests.post(url, json={
+                "action": "l3_rework",
+                "session_id": session_id,
+                "l3_feedback": l3_feedback,
+                "sender": "l3-human-slack"
+            }, timeout=15)
+            logger.info(f"L3 rework triggered for {issue_key} (session {session_id}): HTTP {resp.status_code}")
+            return resp.status_code == 200
+        except Exception as e:
+            logger.error(f"Failed to trigger L3 rework for {issue_key}: {e}")
+            return False
+
+    @app.action("request_changes")
+    def handle_request_changes(ack, body, logger):
+        ack()
+        user = body["user"]["id"]
+        action_value = body["actions"][0]["value"]  # issue_key
+        
+        # Update Slack message
+        try:
+            app.client.chat_update(
+                channel=body["channel"]["id"],
+                ts=body["message"]["ts"],
+                text=f"🔄 Change Request `{action_value}` — *CHANGES REQUESTED* by <@{user}>. "
+                     f"Agent will rework the proposal based on L3 feedback.",
+                blocks=[]
+            )
+        except Exception as e:
+            logger.error(f"Failed to update chat message: {e}")
+        
+        # Trigger rework flow
+        _trigger_l3_rework(
+            action_value,
+            l3_feedback=f"L3 Engineer <@{user}> requested changes on proposal {action_value}. "
+                        f"Check Jira comments for specific adjustment instructions."
+        )
 
 def start_slack_bot(process_message_fn):
     global _process_message_fn

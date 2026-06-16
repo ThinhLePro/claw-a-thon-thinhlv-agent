@@ -121,50 +121,10 @@ def http_request(url: str, method: str = "GET", headers: str = "", body: str = "
         return f"Error: HTTP request failed: {e}"
 
 
-@tool
-def send_notification(audience_type: str, message: str) -> str:
-    """Send a notification report to a specific target audience.
-    Use this to notify L3 engineers or customers.
+# NOTE: send_notification has been centralized to the MCP server.
+# The agent now calls it via MCP (send_notification tool) instead of locally.
+# This removes code duplication and ensures all notifications go through a single path.
 
-    Args:
-        audience_type: Target audience, either "L3_Engineer" or "Customer".
-        message: The message content to send.
-    """
-    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    if not slack_token:
-        return f"Warning: SLACK_BOT_TOKEN not set. Message printed to logs:\n[{audience_type}] {message}"
-
-    aud = audience_type.strip().lower()
-    if aud == "customer":
-        channel = os.environ.get("SLACK_CHANNEL_CUSTOMER", "#all-customer-001")
-        prefix = "📢 *Customer Update:*\n"
-    elif aud == "l3_engineer":
-        channel = os.environ.get("SLACK_CHANNEL_ALERTS", "#noc-l3-alerts")
-        prefix = "🚨 *L3 Engineer Escalation:*\n"
-    else:
-        return f"Error: Unknown audience type '{audience_type}'."
-
-    url = "https://slack.com/api/chat.postMessage"
-    headers = {
-        "Authorization": f"Bearer {slack_token}",
-        "Content-Type": "application/json; charset=utf-8"
-    }
-    payload = {
-        "channel": channel,
-        "text": f"{prefix}{message}"
-    }
-
-    try:
-        import requests
-        resp = requests.post(url, json=payload, headers=headers, timeout=10)
-        resp_json = resp.json()
-        if resp.status_code == 200 and resp_json.get("ok"):
-            return f"✅ Notification sent successfully to Slack channel {channel}."
-        else:
-            return f"Failed to send Slack notification: HTTP {resp.status_code} - {resp_json.get('error', resp.text)}"
-    except Exception as e:
-        logger.error(f"Slack notification exception: {e}")
-        return f"Error sending Slack notification: {e}"
 
 
 @tool

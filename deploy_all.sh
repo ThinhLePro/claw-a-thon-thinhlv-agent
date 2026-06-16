@@ -45,7 +45,7 @@ declare -A AGENTS
 AGENTS=(
   ["supervisor-network-engineer-agent"]=""
   ["analytics-network-engineer-agent"]=""
-  ["expert-engineer-agent"]=""
+  ["senior-network-engineer-agent"]=""
   ["customer-advisory-agent"]=""
 )
 
