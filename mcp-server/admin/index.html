@@ -46,6 +46,10 @@
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
                     <span>AI Session Logs</span>
                 </li>
+                <li class="nav-item" data-tab="parser">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <span>NOC Request Parser</span>
+                </li>
             </ul>
             <div class="sidebar-footer">
                 <div class="status-badge">
@@ -221,6 +225,94 @@
                             <div class="empty-state">
                                 <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 17h6M9 12h6M9 7h6"/></svg>
                                 <p>Select an AI Session to view details and live diagnostics timeline</p>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- NOC Request Parser Tab -->
+                <section class="tab-content" id="tab-parser">
+                    <div class="logs-split-container">
+                        <!-- Left pane: Input Form -->
+                        <div class="logs-sidebar-pane" style="width: 420px; flex-shrink: 0; gap: 14px;">
+                            <div class="pane-header">
+                                <h3>Input Request</h3>
+                            </div>
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                                <label style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Select Sample Scenario</label>
+                                <select id="scenarioDropdown" class="select-field" onchange="applyScenario()" style="width: 100%;">
+                                    <option value="">-- Choose a sample request --</option>
+                                    <option value="1">1. Peering link packet loss (Incident)</option>
+                                    <option value="2">2. Dump switch interface config (Service Request)</option>
+                                    <option value="3">3. Scheduled maintenance ticket (Change Request)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 6px; flex: 1;">
+                                <label style="font-size: 13px; font-weight: 500; color: var(--text-secondary);">Customer Request Text</label>
+                                <textarea id="requestText" class="textarea-field" placeholder="Enter customer message or email..." style="flex: 1; min-height: 250px; font-family: inherit; font-size: 13px; resize: none;"></textarea>
+                            </div>
+                            <button class="btn btn-primary" onclick="analyzeRequest()" style="justify-content: center; width: 100%; padding: 12px;">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                                Phân tích Request
+                            </button>
+                        </div>
+
+                        <!-- Right pane: Results -->
+                        <div class="logs-detail-pane" id="parserResultPane" style="display: flex; flex-direction: column; gap: 16px;">
+                            <div class="empty-state" id="parserEmptyState">
+                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.808 13.064a3 3 0 0 1-.586-1.7V13a5 5 0 1 1 10 0v1.7a3 3 0 0 1-.586 1.7L15 19H9l.663-2z"/></svg>
+                                <p>Nhập tin nhắn yêu cầu và bấm "Phân tích Request" để trích xuất thực thể</p>
+                            </div>
+                            
+                            <!-- Result Fields (hidden by default) -->
+                            <div id="parserResultContent" style="display: none; flex-direction: column; gap: 18px; height: 100%; overflow-y: auto;">
+                                <div class="detail-header" style="padding-bottom: 12px; margin-bottom: 0;">
+                                    <div class="detail-header-left">
+                                        <h2>NOC Request Parser Details</h2>
+                                        <p>Supervisor Agent Intent Extraction</p>
+                                    </div>
+                                    <div class="detail-header-right">
+                                        <span id="resultConfidence" class="badge badge-success">Confidence: 100%</span>
+                                    </div>
+                                </div>
+                                
+                                <div class="info-cards-row" style="margin-bottom: 0;">
+                                    <div class="info-card">
+                                        <div class="info-card-label">Intent (Ý định)</div>
+                                        <div class="info-card-value" id="resIntent" style="color: var(--text-accent);">INCIDENT_RESPONSE</div>
+                                    </div>
+                                    <div class="info-card">
+                                        <div class="info-card-label">Target Device</div>
+                                        <div class="info-card-value" id="resDevice">srx-core-01</div>
+                                    </div>
+                                    <div class="info-card">
+                                        <div class="info-card-label">Priority (Độ ưu tiên)</div>
+                                        <div class="info-card-value" id="resPriority"><span class="badge badge-danger">Cao</span></div>
+                                    </div>
+                                    <div class="info-card">
+                                        <div class="info-card-label">Recommended Agent</div>
+                                        <div class="info-card-value" id="resAgent" style="font-family: 'JetBrains Mono', monospace; font-size: 11px;">expert-engineer-agent</div>
+                                    </div>
+                                </div>
+
+                                <div class="info-card" style="display: flex; flex-direction: column; gap: 12px;">
+                                    <div>
+                                        <div class="info-card-label">Jira Task Draft Title</div>
+                                        <div id="resJiraTitle" style="font-weight: 600; font-size: 13px; color: var(--text-primary); border-bottom: 1px dashed var(--border-subtle); padding-bottom: 6px;">Title</div>
+                                    </div>
+                                    <div>
+                                        <div class="info-card-label">Jira Task Draft Description</div>
+                                        <div id="resJiraDesc" style="font-size: 12px; line-height: 1.5; color: var(--text-secondary); white-space: pre-wrap;">Description</div>
+                                    </div>
+                                </div>
+
+                                <div style="display: flex; gap: 12px; margin-top: auto;">
+                                    <button class="btn btn-ghost" onclick="resetParser()" style="flex: 1; justify-content: center;">Reset</button>
+                                    <button class="btn btn-primary" id="btnTriggerSupervisor" onclick="triggerSupervisor()" style="flex: 2; justify-content: center; background: var(--accent-success);">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 4px;"><path d="M12 19l7-7 3 3-10 10-10-10 3-3 7 7m0-18v18"/></svg>
+                                        Gửi đến NOC Supervisor / Tạo Ticket
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>

@@ -2268,6 +2268,56 @@ if __name__ == "__main__":
             logger.error(f"Failed to delete session {session_id}: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
 
+    async def admin_trigger_parser(request: Request) -> JSONResponse:
+        """Trigger NOC Supervisor Agent with a parsed customer request."""
+        try:
+            data = await request.json()
+            message = data.get("message", "")
+            if not message:
+                return JSONResponse({"error": "Message is required"}, status_code=400)
+
+            # Get supervisor endpoint URL from Redis
+            supervisor_url = redis_client.get("agent:url:supervisor-network-engineer-agent")
+            if not supervisor_url:
+                return JSONResponse({"error": "Supervisor agent URL not found in Redis"}, status_code=404)
+
+            # Remove potential JSON string wrapping quotes
+            if supervisor_url.startswith('"') and supervisor_url.endswith('"'):
+                supervisor_url = supervisor_url[1:-1]
+
+            import time
+            session_id = f"REQ-{int(time.time())}"
+            url = f"{supervisor_url.rstrip('/')}/invocations"
+
+            logger.info(f"Triggering NOC Supervisor at {url} with session {session_id}...")
+            
+            # Make HTTP post request
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.post(
+                    url,
+                    json={
+                        "message": message,
+                        "session_id": session_id,
+                        "user_id": "noc-admin-portal"
+                    }
+                )
+            
+            if resp.status_code == 200:
+                result = resp.json()
+                return JSONResponse({
+                    "status": "success",
+                    "session_id": session_id,
+                    "response": result.get("response", "Workflow triggered successfully.")
+                })
+            else:
+                return JSONResponse({
+                    "error": f"Failed to trigger supervisor. Agent returned {resp.status_code}: {resp.text}"
+                }, status_code=502)
+
+        except Exception as e:
+            logger.error(f"Error triggering NOC Supervisor: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     # Admin static files
     from starlette.staticfiles import StaticFiles
 
@@ -2283,6 +2333,7 @@ if __name__ == "__main__":
         Route("/admin/api/sessions", admin_get_sessions, methods=["GET"]),
         Route("/admin/api/sessions/{session_id}", admin_get_session, methods=["GET"]),
         Route("/admin/api/sessions/{session_id}/clear", admin_clear_session, methods=["POST"]),
+        Route("/admin/api/parser/trigger", admin_trigger_parser, methods=["POST"]),
     ]
 
     logger.info(f"Starting FastMCP server with SSE transport on port {MCP_PORT}...")

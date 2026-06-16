@@ -71,7 +71,8 @@ function setupNavigation() {
         'operations': 'Operation Commands',
         'configurations': 'Configuration Statements',
         'devices': 'Device Inventory',
-        'logs': 'AI Incident Session Logs'
+        'logs': 'AI Incident Session Logs',
+        'parser': 'NOC Inbound Request Parser'
     };
 
     navItems.forEach(item => {
@@ -1185,4 +1186,177 @@ function renderSessionDetails(session) {
             ${timelineHtml}
         </div>
     `;
+}
+
+// ═══ NOC Request Parser Interactive Logic ═══
+function applyScenario() {
+    const val = document.getElementById('scenarioDropdown').value;
+    const txtArea = document.getElementById('requestText');
+    const scenarios = {
+        '1': 'Hi team, nhờ check giúp link peering giữa srx-core-01 và đối tác bên VNG đang bị loss gói từ 9h sáng nay.',
+        '2': 'Nhờ NOC dump cấu hình interface ge-0/0/1 của switch qfx-leaf-02 ra file text gửi qua email giúp mình nhé, cần gấp để audit.',
+        '3': 'Bên em mới gửi phiếu yêu cầu hỗ trợ tạo ticket bảo trì định kỳ cho cụm EX-Switch vào đêm nay, mã phiếu #1102.'
+    };
+    if (val in scenarios) {
+        txtArea.value = scenarios[val];
+    } else {
+        txtArea.value = '';
+    }
+}
+
+function analyzeRequest() {
+    const text = document.getElementById('requestText').value.trim();
+    if (!text) {
+        showToast('Please enter request text first.', 'error');
+        return;
+    }
+
+    // Perform Entity Extraction simulation
+    let intent = 'GENERAL_INQUIRY';
+    let device = 'None';
+    let priority = 'Trung bình';
+    let priorityClass = 'badge-warning';
+    let agent = 'supervisor-network-engineer-agent';
+    let jiraTitle = '';
+    let jiraDesc = '';
+    let confidence = 95;
+
+    const lower = text.toLowerCase();
+
+    // Check for Scenario 1
+    if (lower.includes('peering') || lower.includes('loss') || lower.includes('srx-core-01')) {
+        intent = 'INCIDENT_RESPONSE';
+        device = 'srx-core-01';
+        priority = 'Cao';
+        priorityClass = 'badge-danger';
+        agent = 'analytics-network-engineer-agent';
+        jiraTitle = '[Incident] srx-core-01: Packet loss on peering link';
+        jiraDesc = `Ticket created automatically from client request.\n\nDescription: ${text}\n\nRecommended worker action: Verify peering status and links on srx-core-01.`;
+        confidence = 98;
+    }
+    // Check for Scenario 2
+    else if (lower.includes('dump') || lower.includes('qfx-leaf-02') || lower.includes('ge-0/0/1')) {
+        intent = 'RESOURCE_PROVISIONING';
+        device = 'qfx-leaf-02';
+        priority = 'Khẩn cấp';
+        priorityClass = 'badge-danger';
+        agent = 'expert-engineer-agent';
+        jiraTitle = '[Service Request] qfx-leaf-02: Export interface ge-0/0/1 config';
+        jiraDesc = `Ticket created automatically from client request.\n\nDescription: ${text}\n\nRecommended worker action: Execute show configuration command on qfx-leaf-02 ge-0/0/1 and export log.`;
+        confidence = 97;
+    }
+    // Check for Scenario 3
+    else if (lower.includes('bảo trì') || lower.includes('ex-switch') || lower.includes('#1102') || lower.includes('maintenance')) {
+        intent = 'PROACTIVE_AUDIT';
+        device = 'EX-Switch';
+        priority = 'Trung bình';
+        priorityClass = 'badge-warning';
+        agent = 'customer-advisory-agent';
+        jiraTitle = '[Change Request] EX-Switch: Scheduled maintenance ticket #1102';
+        jiraDesc = `Ticket created automatically from client request.\n\nDescription: ${text}\n\nRecommended worker action: Draft maintenance ticket, contact L3 engineer for coordinates, notify client.`;
+        confidence = 96;
+    }
+    // Custom inputs
+    else {
+        // Simple logic for custom text
+        if (lower.includes('error') || lower.includes('hỏng') || lower.includes('lỗi') || lower.includes('chết') || lower.includes('mất kết nối') || lower.includes('loss') || lower.includes('ping')) {
+            intent = 'INCIDENT_RESPONSE';
+            agent = 'analytics-network-engineer-agent';
+            priority = 'Cao';
+            priorityClass = 'badge-danger';
+        } else if (lower.includes('cấu hình') || lower.includes('config') || lower.includes('mở port') || lower.includes('vlan') || lower.includes('peering') || lower.includes('provision')) {
+            intent = 'RESOURCE_PROVISIONING';
+            agent = 'expert-engineer-agent';
+            priority = 'Trung bình';
+            priorityClass = 'badge-warning';
+        } else {
+            intent = 'PROACTIVE_AUDIT';
+            agent = 'customer-advisory-agent';
+            priority = 'Thấp';
+            priorityClass = 'badge-success';
+        }
+
+        // Device extraction
+        const deviceMatch = text.match(/([a-zA-Z0-9]+-[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)?)/);
+        if (deviceMatch) {
+            device = deviceMatch[1];
+        } else {
+            device = 'Unknown';
+        }
+
+        jiraTitle = `[NOC Task] ${device !== 'Unknown' ? device : 'System'}: Customer request processing`;
+        jiraDesc = `Auto-drafted NOC ticket.\n\nDescription: ${text}`;
+    }
+
+    // Update UI fields
+    document.getElementById('resIntent').textContent = intent;
+    document.getElementById('resDevice').textContent = device;
+    document.getElementById('resPriority').innerHTML = `<span class="badge ${priorityClass}">${priority}</span>`;
+    document.getElementById('resAgent').textContent = agent;
+    document.getElementById('resJiraTitle').textContent = jiraTitle;
+    document.getElementById('resJiraDesc').textContent = jiraDesc;
+    document.getElementById('resultConfidence').textContent = `Confidence: ${confidence}%`;
+
+    // Toggle panels
+    document.getElementById('parserEmptyState').style.display = 'none';
+    document.getElementById('parserResultContent').style.display = 'flex';
+
+    showToast('Request analyzed successfully', 'success');
+}
+
+function resetParser() {
+    document.getElementById('scenarioDropdown').value = '';
+    document.getElementById('requestText').value = '';
+    document.getElementById('parserEmptyState').style.display = 'flex';
+    document.getElementById('parserResultContent').style.display = 'none';
+}
+
+async function triggerSupervisor() {
+    const message = document.getElementById('requestText').value.trim();
+    if (!message) {
+        showToast('Please enter a request message first.', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('btnTriggerSupervisor');
+    btn.disabled = true;
+    btn.textContent = 'Triggering...';
+
+    try {
+        const response = await fetch(`${API_BASE}/admin/api/parser/trigger`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ message })
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            showToast(`Workflow ${data.session_id} triggered successfully!`, 'success');
+            
+            // Wait 1.5 seconds, then redirect to AI Session Logs tab
+            setTimeout(() => {
+                // Find logs tab menu item and click it
+                const logsTabMenuItem = document.querySelector('.nav-item[data-tab="logs"]');
+                if (logsTabMenuItem) {
+                    logsTabMenuItem.click();
+                    // Load sessions and automatically select the new session
+                    setTimeout(() => {
+                        loadSessions().then(() => {
+                            selectSession(data.session_id);
+                        });
+                    }, 500);
+                }
+            }, 1500);
+        } else {
+            const err = await response.json();
+            showToast(`Error: ${err.error || 'Failed to trigger supervisor'}`, 'error');
+        }
+    } catch (e) {
+        showToast(`Connection error: ${e.message}`, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Gửi đến NOC Supervisor / Tạo Ticket';
+    }
 }
