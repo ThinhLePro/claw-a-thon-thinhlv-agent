@@ -1,82 +1,79 @@
-# Network Engineer — AI Agent + MCP Gateway
+# Hierarchical Multi-Agent Network NOC — AI Agents + MCP Gateway
 
-An autonomous AI network engineer agent powered by LangChain/LangGraph, deployed on **GreenNode AgentBase** platform, with a local **MCP (Model Context Protocol) server** providing real-time access to Juniper datacenter devices via NETCONF.
+An autonomous, hierarchical Multi-Agent Network Operations Center (NOC) system powered by LangChain, deployed on **GreenNode AgentBase**, with a local **MCP (Model Context Protocol) server** providing real-time access to Juniper datacenter devices via NETCONF.
+
+The system transitions from a single agent design to a team of 4 specialized AI agents orchestrated by a NOC Supervisor Agent.
 
 ---
 
 ## Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                           GreenNode Cloud Platform                              │
-│                                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐                  │
-│  │  Network Engineer Agent (dc-network-engineer-agent/)      │                  │
-│  │  ┌──────────────────────────────────────────────────────┐ │                  │
-│  │  │  main.py ── LangChain Agent + Memory + Planning      │ │                  │
-│  │  │  ├── system_prompt.py   (Network Engineer)                  │ │                  │
-│  │  │  ├── mcp_client.py      (Auto-discover MCP tools)   │ │                  │
-│  │  │  ├── telegram_bot.py    (Telegram integration)       │ │                  │
-│  │  │  └── markdown_converter.py (MD → Telegram HTML)      │ │                  │
-│  │  └──────────────────────────────────────────────────────┘ │                  │
-│  │  Public IP: IP Public Range (floating, not fixed)         │                  │
-│  └──────────────────────┬────────────────────────────────────┘                  │
-│                         │ MCP over SSE (HTTP)                                   │
-└─────────────────────────┼───────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│  Firewall Device (firewall-gateway)                                           │
-│  Static NAT: IP Public (public) ──► IP LAN (LAN)                              │
-└─────────────────────────┬───────────────────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                        On-Premises MCP Server                                   │
-│                                                                                 │
-│  ┌───────────────────────────────────────────────────────────┐                  │
-│  │  MCP Server (mcp-server/) — Docker container              │                  │
-│  │  ├── mcp_server.py   (FastMCP + Juniper NETCONF tools)   │                  │
-│  │  ├── Port: 8000/SSE                                       │                  │
-│  │  └── Loads: shared/devices.json                           │                  │
-│  └──────────────────────┬────────────────────────────────────┘                  │
-│  IP LAN: IP LAN │ IP Lab                                                             │
-│                          │ NETCONF (SSH/830)                                    │
-│                          ▼                                                      │
-│  ┌───────────────────────────────────────────────────────────┐                  │
-│  │  Lab Network Devices (IP LAN range)                       │                  │
-│  │  ├── network-gateway-01     (QFX10008, DC Gateway)       │                  │
-│  │  ├── vnpt-access-switch-01  (EX4400, VNPT Access)        │                  │
-│  │  ├── tor-access-switch-01   (EX4400, ToR Switch)          │                  │
-│  │  ├── core-leaf-01           (Core Leaf 01)               │                  │
-│  │  ├── core-leaf-02           (Core Leaf 02)               │                  │
-│  │  ├── core-spine-01          (Core Spine 01)              │                  │
-│  │  └── firewall-gateway-01    (Firewall Gateway)           │                  │
-│  └───────────────────────────────────────────────────────────┘                  │
-└─────────────────────────────────────────────────────────────────────────────────┘
+                 ┌────────────────────────────────────────────────────────┐
+                 │                Telegram Bot / Prometheus Alerts        │
+                 └───────────────────────────┬────────────────────────────┘
+                                             │ User / Webhook Event
+                                             ▼
+ ┌────────────────────────────────────────────────────────────────────────────────────────┐
+ │                              GreenNode Cloud Platform                                  │
+ │                                                                                        │
+ │      ┌──────────────────────────────────────────────────────────────────────────┐      │
+ │      │                 NOC Supervisor Agent (Entrypoint)                        │      │
+ │      │                 [supervisor-network-engineer-agent]                      │      │
+ │      │                 - Decides next action (intent routing)                   │      │
+ │      │                 - Maintains loop limit & manages global state            │      │
+ │      └───────────┬────────────────────────┬────────────────────────┬────────────┘      │
+ │                  │                        │                        │                   │
+ │                  ▼                        ▼                        ▼                   │
+ │       ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐       │
+ │       │   Triage/Analytics   │ │    Expert Engineer   │ │  Customer Advisory   │       │
+ │       │       Agent          │ │        Agent           │ │        Agent           │       │
+ │       │ [analytics-network-  │ │  [expert-engineer-   │ │ [customer-advisory-  │       │
+ │       │   engineer-agent]    │ │       agent]         │ │       agent]         │       │
+ │       │  - Filters alerts    │ │ - Runs diagnostics   │ │ - Prepares RCA/SOP   │       │
+ │       │  - Incident triage   │ │ - Executes changes   │ │ - L3 notifications   │       │
+ │       │  - Creates Jira task │ │ - NETCONF CLI tools  │ │ - Closes Jira task   │       │
+ │       └──────────┬───────────┘ └──────────┬───────────┘ └──────────┬───────────┘       │
+ └──────────────────┼────────────────────────┼────────────────────────┼───────────────────┘
+                    │                        │                        │
+                    ├────────────────────────┴────────────────────────┤ SSE / HTTP
+                    ▼
+ ┌────────────────────────────────────────────────────────────────────────────────────────┐
+ │                              On-Premises Infrastructure                                │
+ │                                                                                        │
+ │     ┌──────────────────────────────────────────────────────────────────────────┐       │
+ │     │                        On-Premises MCP Server                            │       │
+ │     │                        - FastMCP Server + NETCONF CLI Wrapper            │       │
+ │     │                        - Loads: shared/devices.json & shared/db/*.db     │       │
+ │     └─────────────────────────────────────┬────────────────────────────────────┘       │
+ │                                           │ NETCONF (SSH 830/22)                       │
+ │                                           ▼                                            │
+ │     ┌──────────────────────────────────────────────────────────────────────────┐       │
+ │     │                      Lab Network Devices (QFX, EX, SRX)                  │       │
+ │     └──────────────────────────────────────────────────────────────────────────┘       │
+ └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Network Flow
+### Agent Roles & Hierarchy
 
-```
-Agent (GreenNode Cloud, IP Public Range)
-  │
-  │  HTTP/SSE ──► IP Public:8000
-  │
-  ▼
-Firewall Device
-  │  Static NAT: IP Public ──► IP LAN
-  │
-  ▼
-MCP Server (IP LAN / IP Lab)
-  │
-  │  NETCONF (SSH port 830 or 22)
-  │
-  ▼
-Lab Network Devices (IP LAN range)
-```
+1.  **NOC Supervisor Agent** (`supervisor-network-engineer-agent`):
+    *   **Role**: Router / Orchestrator.
+    *   **Responsibility**: Receives incoming user commands (via Telegram) or Prometheus Alertmanager webhooks. Uses a router LLM to analyze the incident state and delegate the task to the correct worker agent, or replies directly for general design/audit queries. It enforces a safety loop limit of 5 turns before auto-escalating to Level 3.
+2.  **Triage/Analytics Agent** (`analytics-network-engineer-agent`):
+    *   **Role**: Incident Triager.
+    *   **Responsibility**: Validates alerts, reviews hardware/software states, checks for link flapping, and creates the mandatory Jira ticket on the KAN board.
+3.  **Expert Engineer Agent** (`expert-engineer-agent`):
+    *   **Role**: Deep Diagnostician & Executor.
+    *   **Responsibility**: Connects to datacenter switches/routers using NETCONF MCP tools, runs complex troubleshooting workflows, designs configuration changes, and updates Jira with detailed technical notes.
+4.  **Customer Advisory Agent** (`customer-advisory-agent`):
+    *   **Role**: L3 Engineer / Customer Communicator.
+    *   **Responsibility**: Reviews the resolved incident logs, drafts customer-facing reports (Root Cause Analysis - RCA), prepares self-help guidelines (SOPs), sends out notifications via Telegram, and transitions the Jira ticket to **DONE**.
 
-> **Note:** Agent public IP is from the range `IP Public Range` but uses a floating IP, so the exact IP is not fixed. Firewall rules on the firewall device should allow this range.
+### State & Orchestration Flow
+
+*   **Redis State Cache**: The global state of the conversation and incident metadata is cached in a centralized Redis database.
+*   **Routing Directory**: Worker URL endpoints are dynamically registered in Redis under `agent:url:<agent_name>` upon deployment.
+*   **Asynchronous Hand-off**: The supervisor agent invokes worker agents using asynchronous HTTP POST requests, which callback to the supervisor once their subtasks are completed.
 
 ---
 
@@ -84,113 +81,91 @@ Lab Network Devices (IP LAN range)
 
 ```
 claw-a-thon-thinhlv-agent/
-├── README.md                          # This file
-├── docker-compose.yml                 # Run MCP server (agent deploys to GreenNode)
+├── README.md                              # This file
+├── docker-compose.yml                     # Runs MCP server & monitoring locally
+├── deploy_all.sh                          # Automatically builds, pushes, and deploys all 4 agents to GreenNode
 │
-├── shared/                            # Shared configuration
-│   └── devices.json                   # Device inventory (single source of truth)
+├── shared/                                # Shared modules and configurations
+│   ├── devices.json                       # Single source of truth for datacenter device inventory
+│   ├── scan_results.json                  # Output of live scanned device parameters
+│   ├── approve_ticket.py                  # CLI utility to simulate webhook approvals from Jira
+│   └── db/
+│       ├── init_network_assets.py         # Initializes the network assets database
+│       └── network_assets.db              # Network Assets SQLite DB (gitignored)
 │
-├── dc-network-engineer-agent/         # 🤖 Agent — deploys to GreenNode
-│   ├── main.py                        # Entry point: agent + HTTP server
-│   ├── system_prompt.py               # Network Engineer system prompt
-│   ├── mcp_client.py                  # Auto-discover MCP tools from server
-│   ├── telegram_bot.py                # Telegram bot integration
-│   ├── markdown_converter.py          # Markdown → Telegram HTML converter
-│   ├── .env.example                   # Environment variables template
-│   ├── Dockerfile                     # Container build
-│   ├── requirements.txt               # Python dependencies
-│   └── .greennode.json                # GreenNode deployment credentials
+├── supervisor-network-engineer-agent/      # 👑 Entrypoint & NOC Coordinator Agent
+│   ├── main.py                            # Runs web service, Telegram bot, and routing loops
+│   ├── system_prompt.py                   # Intent routing guidelines
+│   ├── telegram_bot.py                    # Telegram long-polling integration
+│   ├── markdown_converter.py              # MD to Telegram HTML converter
+│   └── Dockerfile
 │
-├── mcp-server/                        # 🔌 MCP Server — runs on-prem (Docker)
-│   ├── mcp_server.py                  # FastMCP + Juniper NETCONF tools
-│   ├── .env.example                   # Environment variables template
-│   ├── Dockerfile                     # Container build
-│   └── requirements.txt               # Python dependencies
+├── analytics-network-engineer-agent/      # 🔍 Alert Triager & Jira Ticket Creator
+│   ├── main.py                            # Agent loop
+│   ├── system_prompt.py                   # Triage prompt
+│   ├── agent_tools.py                     # Custom tools for alert analysis
+│   └── Dockerfile
 │
-├── dc-network-engineer-skills/        # 📚 SKILL.md knowledge base
-│   └── .claude/skills/                # Network engineering domain skills
-│       ├── dc-overview/               # Platform reference & skill router
-│       ├── dc-infrastructure/         # DC physical infrastructure (power, cooling, racks)
-│       ├── dc-cabling/                # Fiber, copper, transceivers, patch panels
-│       ├── dc-tcpip/                  # TCP/IP deep dive & packet analysis
-│       ├── dc-routing/                # BGP, ISP peering, DDoS protection
-│       ├── dc-juniper-basics/         # JunOS CLI, routing, policies
-│       ├── dc-juniper-evpn/           # EVPN-VXLAN & IP Fabric design
-│       ├── dc-juniper-firewall/       # SRX, NAT, IPSec, clustering
-│       ├── dc-juniper-mclag/          # MC-LAG protocols & HA
-│       ├── dc-operations/             # Daily SOPs & change management
-│       ├── dc-troubleshoot/           # Incident response & monitoring
-│       └── dc-planning/               # Network design & audit
+├── expert-engineer-agent/                 # ⚙️ Deep Diagnostic & Config Executor
+│   ├── main.py                            # Agent loop
+│   ├── system_prompt.py                   # Expert troubleshooting guidelines
+│   ├── agent_tools.py                     # Wrapper for Netmiko/NETCONF tools
+│   └── Dockerfile
 │
-└── greennode-agentbase-skills/        # 🛠️ GreenNode Platform skills
-    └── .claude/skills/                # AgentBase lifecycle management
-        ├── agentbase-wizard/          # Guided scaffold → deploy wizard
-        ├── agentbase-deploy/          # Build, push, deploy
-        ├── agentbase-identity/        # Agent identities & auth
-        ├── agentbase-llm/             # Platform LLM access
-        ├── agentbase-memory/          # Conversation & semantic memory
-        ├── agentbase-monitor/         # Logs, metrics, dashboard
-        ├── agentbase-gateway/         # Resource Gateway (MCP)
-        ├── agentbase-policy/          # Authorization policies
-        └── agentbase-teardown/        # Delete all resources
+├── customer-advisory-agent/               # 📝 L3 Customer Advisory & RCA Creator
+│   ├── main.py                            # Agent loop
+│   ├── system_prompt.py                   # RCA reporting & closing guidelines
+│   ├── agent_tools.py                     # Customer communication & notify tools
+│   └── Dockerfile
+│
+├── mcp-server/                            # 🔌 On-Premises MCP Gateway
+│   ├── mcp_server.py                      # FastMCP server exposing NETCONF commands
+│   ├── requirements.txt                   # MCP server dependencies
+│   └── Dockerfile
+│
+└── greennode-agentbase-skills/            # 🛠️ Platform Deployment Skills
 ```
 
 ---
 
 ## Quick Start
 
-### 1. Start MCP Server (on-prem machine)
+### 1. Start MCP Server (on-premises machine)
 
 ```bash
 # Configure credentials
 cp mcp-server/.env.example mcp-server/.env
-# Edit mcp-server/.env — set NETCONF_PASSWORD
+# Edit mcp-server/.env — set NETCONF_PASSWORD and devices paths
 
-# Run with Docker Compose
+# Run using Docker Compose
 docker compose up -d mcp-server
 
-# Verify
-curl http://localhost:8000/sse
+# Verify health
+curl http://localhost:8980/sse
 ```
 
-### 2. Deploy Agent to GreenNode
+### 2. Deploy the Hierarchical Agent NOC
+
+We provide a deployment script to build, push, deploy, and register all 4 agents in one command:
 
 ```bash
-cd dc-network-engineer-agent
-
-# Configure environment
-cp .env.example .env
-# Edit .env — set LLM keys, MEMORY_ID, MCP_SERVER_URL, TELEGRAM_BOT_TOKEN
-
-# Deploy using GreenNode AgentBase skills
-# (from Claude Code or any SKILL.md-compatible tool)
-/agentbase-wizard
+# 1. Ensure GreenNode credentials are in .greennode.json at the root of the project
+# 2. Configure .env file for each agent (or copy from examples)
+# 3. Deploy all 4 agents to GreenNode Cloud Platform:
+./deploy_all.sh
 ```
 
-### 3. Test Locally (optional)
-
-```bash
-# Uncomment agent section in docker-compose.yml, then:
-docker compose up --build
-```
-
----
-
-## Skills Reference
-
-### Network Engineer Skills (`dc-network-engineer-skills/`)
-
-Domain knowledge that turns the AI agent into a **Network Engineer**. Covers: physical DC infrastructure, cabling, TCP/IP, internet routing, Juniper expertise (EVPN-VXLAN, SRX, MC-LAG), and operational workflows. See [dc-network-engineer-skills/README.md](dc-network-engineer-skills/README.md) for details.
-
-### GreenNode AgentBase Skills (`greennode-agentbase-skills/`)
-
-Platform lifecycle management skills for **GreenNode AgentBase** — scaffold, configure, code, test, deploy, monitor, and teardown agents. See [greennode-agentbase-skills/README.md](greennode-agentbase-skills/README.md) for the full skills index.
+The `deploy_all.sh` script will:
+*   Build Docker images for `supervisor-network-engineer-agent`, `analytics-network-engineer-agent`, `expert-engineer-agent`, and `customer-advisory-agent`.
+*   Push images to your VNG Cloud Container Registry.
+*   Deploy them as GreenNode AgentBase runtimes.
+*   Query the dynamic endpoint URLs and register them in Redis.
 
 ---
 
 ## MCP Tools (Auto-discovered)
 
-The agent auto-discovers tools from the MCP server at startup. Currently available:
+Worker agents auto-discover tools from the MCP server at startup. Currently available tools:
 
 | Tool | Description |
 |------|-------------|
@@ -219,71 +194,42 @@ The agent auto-discovers tools from the MCP server at startup. Currently availab
 
 ## Jira Integration & Task Lifecycle
 
-The agent is integrated with the team's Jira Kanban board (Project **KAN**). It automatically tracks, logs, and updates operational tasks to maintain transparency and SLA compliance.
+The agents are integrated with the team's Jira Kanban board (Project **KAN**). They automatically track, log, and update operational tasks.
 
 ### Jira Tools
-The agent uses the following custom tools to interact with Jira REST API v3:
+The workers use standard tools to interact with Jira REST API v3:
 - `create_jira_task(summary, description)`: Creates a new Task on the KAN board and returns the Issue Key (e.g., `KAN-15`).
 - `update_task_status(issue_key, target_status)`: Transition task state to: `IN_PROGRESS`, `WAITING`, `ERROR`, or `DONE`.
 - `add_task_comment(issue_key, comment_body)`: Appends updates, CLI logs, diffs, or troubleshooting reports to the ticket.
 
 ### Workflow Protocol
-Each request received by the agent is classified into two categories:
 
-1. **Category A: Direct Response (No Ticket)**
-   - Knowledge queries / explanations (e.g., "What is BGP community?", explaining EVPN).
-   - Simple read-only operations (e.g., `show interfaces`, checking BGP neighbor status).
-   - Casual conversation or confirmation.
-   
-2. **Category B: Mandatory Jira Ticket**
-   - **Configuration Changes**: Adding/modifying/deleting VLANs, interfaces, firewalls, routing policy, BGP peers.
-   - **Incident Resolution**: Interface down, BGP flapping, packet loss, high latency.
-   - **Customer Requests**: Circuit provisioning, IP assignment, port opening, bandwidth changes.
-   - **Maintenance & Planning**: Upgrades, backups, capacity analysis, config audits.
-
-### Lifecycle Transition States
 ```
-[Start] -> create_jira_task -> [KAN-XX (Status: TODO)]
-                                      │
-                                      ▼
-                             update_task_status
-                                      │
-              ┌───────────────────────┴───────────────────────┐
-              ▼                                               ▼
-      [IN_PROGRESS] ──► (Run Ops/CLI/Config) ──► (Create Diff / Review Needed)
-              │                                               │
-              │                                               ▼
-              │                                      update_task_status
-              │                                               │
-              │                                               ▼
-              │                                           [WAITING]
-              │                                               │
-              │                                               ▼
-              │                                        (User Approves)
-              │                                               │
-              ├───────────────────────────────────────────────┘
-              ▼
-      add_task_comment (Post outputs/reports)
-              │
-              ├────────────────────────┬──────────────────────┐
-              ▼                        ▼                      ▼
-      update_task_status       update_task_status      (More steps)
-              │                        │                      │
-              ▼                        ▼                      ▼
-           [DONE]                   [ERROR]             [IN_PROGRESS]
+[Start Alert] 
+      │
+      ▼
+[Supervisor] ──► [Analytics Agent] ──► (Create Jira Task KAN-XX) ──► (Status: TODO)
+                                                                            │
+                                                                            ▼
+[Supervisor] ◄─────────────────────────────────────────────────────── [IN_PROGRESS]
+      │
+      ▼
+[Expert Agent] ──► (Run Diagnostics/Fixes via MCP)
+      │
+      ├─► (Configuration Change Needed) ──► (Show Config Diff) ──► [WAITING FOR APPROVAL]
+      │                                                                     │
+      │                                                                     ▼
+      │                                                           (User Approves / Webhook)
+      │                                                                     │
+      ├─────────────────────────────────────────────────────────────────────┘
+      │
+      ▼
+[Supervisor] ──► [Customer Advisory Agent] ──► (Post RCA/SOP Report) ──► [DONE]
 ```
-
-- **IN_PROGRESS**: Transitioned immediately before starting work.
-- **WAITING**: Transitioned when waiting for user approval (e.g., showing a config diff before committing changes).
-- **ERROR**: Transitioned if tools fail or unexpected errors occur, appending error details.
-- **DONE**: Transitioned upon successful completion, appending a final summary report.
 
 ---
 
 ## Security Notes
 
-- **Never commit `.env` files** — they contain secrets (API keys, passwords, tokens)
-- NETCONF credentials are stored in `mcp-server/.env`, not in source code
-- Agent credentials (LLM keys, Telegram token) are in `dc-network-engineer-agent/.env`
-- GreenNode deployment credentials are in `.greennode.json` (gitignored)
-- The firewall device should whitelist the GreenNode agent IP range (`IP Public Range`)
+*   **Secrets & Credentials**: Always keep your environment-specific passwords, Slack tokens, and Jira API Tokens in `.env` files. Ensure they are gitignored and never hardcoded in source files.
+*   **Webhook Signing**: Simulate JIRA approvals locally using the HMAC SHA256 signatures helper script [approve_ticket.py](file:///home/thinhle/claw-a-thon-thinhlv-agent/shared/approve_ticket.py).
