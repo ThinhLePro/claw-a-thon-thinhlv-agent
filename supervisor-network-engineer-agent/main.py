@@ -3,6 +3,7 @@ import logging
 import threading
 import json
 import requests
+import html
 from datetime import datetime
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
@@ -82,7 +83,7 @@ def send_telegram_message(message: str):
         resp = requests.post(url, json={
             "chat_id": chat_id,
             "text": message,
-            "parse_mode": "Markdown"
+            "parse_mode": "HTML"
         }, timeout=10)
         if resp.status_code == 200:
             logger.info("Successfully sent session log to Telegram.")
@@ -207,14 +208,14 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
                 jira = state.get("jira_issue_key", "None")
                 logs = state.get("diagnostic_logs", [])
                 
-                log_text = f"📋 *Session Completed: `{session_id}`*\n"
+                log_text = f"📋 <b>Session Completed: <code>{html.escape(session_id)}</code></b>\n"
                 log_text += f"━━━━━━━━━━━━━━━━━━━\n"
-                log_text += f"▪️ *Symptoms*: {symptoms}\n"
-                log_text += f"▪️ *Jira Ticket*: `{jira}`\n"
+                log_text += f"▪️ <b>Symptoms</b>: {html.escape(symptoms)}\n"
+                log_text += f"▪️ <b>Jira Ticket</b>: <code>{html.escape(jira)}</code>\n"
                 log_text += f"━━━━━━━━━━━━━━━━━━━\n\n"
-                log_text += "*Diagnostic History:*\n"
+                log_text += "<b>Diagnostic History:</b>\n"
                 for idx, log_entry in enumerate(logs, 1):
-                    log_text += f"{idx}. {log_entry}\n"
+                    log_text += f"{idx}. {html.escape(log_entry)}\n"
                 
                 send_telegram_message(log_text)
             except Exception as tg_ex:

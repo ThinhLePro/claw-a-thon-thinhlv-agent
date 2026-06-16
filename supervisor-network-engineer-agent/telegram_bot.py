@@ -9,6 +9,7 @@ import asyncio
 import logging
 import json
 import redis
+import html
 from markdown_converter import markdown_to_telegram_html
 
 logger = logging.getLogger(__name__)
@@ -97,12 +98,17 @@ def start_telegram_bot(process_message_fn, bot_token: str):
                         symptoms = state_data.get("symptoms", "No details")[:50]
                         jira = state_data.get("jira_issue_key", "None")
                         assignee = state_data.get("current_assignee", "unknown")
-                        sessions_info.append(f"🔹 *ID*: `{session_id}`\n  • Assignee: `{assignee}`\n  • Jira: `{jira}`\n  • Symptoms: {symptoms}")
+                        sessions_info.append(
+                            f"🔹 <b>ID</b>: <code>{html.escape(session_id)}</code>\n"
+                            f"  • Assignee: <code>{html.escape(assignee)}</code>\n"
+                            f"  • Jira: <code>{html.escape(jira)}</code>\n"
+                            f"  • Symptoms: {html.escape(symptoms)}"
+                        )
                     except Exception:
-                        sessions_info.append(f"🔹 *ID*: `{session_id}` (Lỗi parse data)")
+                        sessions_info.append(f"🔹 <b>ID</b>: <code>{html.escape(session_id)}</code> (Lỗi parse data)")
             
-            msg = "📋 *Danh sách 15 Session gần nhất:*\n\n" + "\n\n".join(sessions_info)
-            await update.message.reply_text(msg, parse_mode="Markdown")
+            msg = "📋 <b>Danh sách 15 Session gần nhất:</b>\n\n" + "\n\n".join(sessions_info)
+            await update.message.reply_text(msg, parse_mode="HTML")
         except Exception as e:
             logger.error(f"Error listing sessions: {e}")
             await update.message.reply_text(f"❌ Có lỗi xảy ra: {e}")
@@ -130,23 +136,23 @@ def start_telegram_bot(process_message_fn, bot_token: str):
             jira = state_data.get("jira_issue_key", "None")
             assignee = state_data.get("current_assignee", "Finished" if state_data.get("current_assignee") == "FINISH" else state_data.get("current_assignee", "unknown"))
 
-            log_text = f"📋 *Session Logs for `{session_id}`*\n"
+            log_text = f"📋 <b>Session Logs for <code>{html.escape(session_id)}</code></b>\n"
             log_text += f"━━━━━━━━━━━━━━━━━━━\n"
-            log_text += f"▪️ *Symptoms*: {symptoms}\n"
-            log_text += f"▪️ *Jira Ticket*: `{jira}`\n"
-            log_text += f"▪️ *Current Assignee*: `{assignee}`\n"
+            log_text += f"▪️ <b>Symptoms</b>: {html.escape(symptoms)}\n"
+            log_text += f"▪️ <b>Jira Ticket</b>: <code>{html.escape(jira)}</code>\n"
+            log_text += f"▪️ <b>Current Assignee</b>: <code>{html.escape(assignee)}</code>\n"
             log_text += f"━━━━━━━━━━━━━━━━━━━\n\n"
 
             if not logs:
-                log_text += "_Chưa có logs chẩn đoán nào được ghi nhận._"
+                log_text += "<i>Chưa có logs chẩn đoán nào được ghi nhận.</i>"
             else:
-                log_text += "*Diagnostic History:*\n"
+                log_text += "<b>Diagnostic History:</b>\n"
                 for idx, log_entry in enumerate(logs, 1):
-                    log_text += f"{idx}. {log_entry}\n"
+                    log_text += f"{idx}. {html.escape(log_entry)}\n"
 
             # Check message length
             if len(log_text) <= 4096:
-                await update.message.reply_text(log_text, parse_mode="Markdown")
+                await update.message.reply_text(log_text, parse_mode="HTML")
             else:
                 # Split and send
                 parts = []
@@ -160,7 +166,7 @@ def start_telegram_bot(process_message_fn, bot_token: str):
                 if current:
                     parts.append(current)
                 for part in parts:
-                    await update.message.reply_text(part, parse_mode="Markdown")
+                    await update.message.reply_text(part, parse_mode="HTML")
 
         except Exception as e:
             logger.error(f"Error retrieving logs for session {session_id}: {e}")
