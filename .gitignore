@@ -25,3 +25,9 @@ mcp-env/
 # === OS ===
 .DS_Store
 Thumbs.db
+
+# === Local / Scratch ===
+scratch-venv/
+scratch-redis-install/
+old-code/
+*.db

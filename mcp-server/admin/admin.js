@@ -32,7 +32,8 @@ let state = {
     },
     operations: { data: [], page: 1, total: 0 },
     configurations: { data: [], page: 1, total: 0 },
-    devices: { data: [] }
+    devices: { data: [] },
+    logs: { sessions: [], activeSessionId: null }
 };
 
 // ═══ Initialize ═══
@@ -69,7 +70,8 @@ function setupNavigation() {
         'acl': 'Command ACL Rules',
         'operations': 'Operation Commands',
         'configurations': 'Configuration Statements',
-        'devices': 'Device Inventory'
+        'devices': 'Device Inventory',
+        'logs': 'AI Incident Session Logs'
     };
 
     navItems.forEach(item => {
@@ -86,6 +88,11 @@ function setupNavigation() {
             
             // Update title
             document.getElementById('pageTitle').textContent = titles[tab];
+
+            // Trigger log loading
+            if (tab === 'logs') {
+                loadSessions();
+            }
         });
     });
 
@@ -892,4 +899,290 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+// ═══ AI Session Logs ═══
+async function loadSessions() {
+    const listContainer = document.getElementById('sessionsList');
+    if (!listContainer) return;
+    
+    listContainer.innerHTML = '<div class="empty-state">Loading active sessions...</div>';
+    
+    try {
+        const response = await fetch(`${API_BASE}/admin/api/sessions`);
+        if (response.ok) {
+            state.logs.sessions = await response.json();
+            renderSessionsList(state.logs.sessions);
+            
+            // Re-select active session if it still exists
+            if (state.logs.activeSessionId) {
+                const stillExists = state.logs.sessions.some(s => s.session_id === state.logs.activeSessionId);
+                if (stillExists) {
+                    selectSession(state.logs.activeSessionId);
+                } else {
+                    state.logs.activeSessionId = null;
+                    resetDetailPane();
+                }
+            }
+        } else {
+            listContainer.innerHTML = '<div class="empty-state text-danger">Failed to fetch sessions.</div>';
+        }
+    } catch (e) {
+        console.error('Error fetching sessions:', e);
+        listContainer.innerHTML = '<div class="empty-state text-danger">Error connecting to Redis API.</div>';
+    }
+}
+
+function renderSessionsList(sessions) {
+    const listContainer = document.getElementById('sessionsList');
+    if (!listContainer) return;
+    
+    if (!sessions || sessions.length === 0) {
+        listContainer.innerHTML = `
+            <div class="empty-state" style="padding: 20px 0;">
+                <p>No active sessions in Redis.</p>
+            </div>
+        `;
+        return;
+    }
+    
+    listContainer.innerHTML = sessions.map(session => {
+        const activeClass = session.session_id === state.logs.activeSessionId ? 'active' : '';
+        const summary = escapeHtml(session.symptoms || 'No symptoms summary');
+        const assignee = escapeHtml(session.current_assignee || 'Unknown');
+        const loopCount = session.loop_count || 0;
+        const cleanId = escapeHtml(session.session_id);
+        
+        return `
+            <div class="session-item ${activeClass}" onclick="selectSession('${cleanId}')">
+                <div class="session-item-header">
+                    <div class="session-id" title="${cleanId}">${cleanId}</div>
+                </div>
+                <div class="session-summary" title="${summary}">${summary}</div>
+                <div class="session-meta">
+                    <span class="session-assignee">${assignee}</span>
+                    <span class="session-loop">Loops: ${loopCount}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function selectSession(sessionId) {
+    state.logs.activeSessionId = sessionId;
+    
+    // Highlight active item
+    document.querySelectorAll('.session-item').forEach(item => {
+        const idDiv = item.querySelector('.session-id');
+        if (idDiv && idDiv.textContent === sessionId) {
+            item.classList.add('active');
+        } else {
+            item.classList.remove('active');
+        }
+    });
+    
+    loadSessionDetails(sessionId);
+}
+
+async function loadSessionDetails(sessionId) {
+    const detailPane = document.getElementById('sessionDetailPane');
+    if (!detailPane) return;
+    
+    try {
+        const response = await fetch(`${API_BASE}/admin/api/sessions/${sessionId}`);
+        if (response.ok) {
+            const session = await response.json();
+            renderSessionDetails(session);
+        } else {
+            detailPane.innerHTML = `<div class="empty-state text-danger">Failed to load details for ${escapeHtml(sessionId)}.</div>`;
+        }
+    } catch (e) {
+        console.error('Error fetching session details:', e);
+        detailPane.innerHTML = `<div class="empty-state text-danger">Error connecting to session details API.</div>`;
+    }
+}
+
+function resetDetailPane() {
+    const detailPane = document.getElementById('sessionDetailPane');
+    if (detailPane) {
+        detailPane.innerHTML = `
+            <div class="empty-state">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 17h6M9 12h6M9 7h6"/></svg>
+                <p>Select an AI Session to view details and live diagnostics timeline</p>
+            </div>
+        `;
+    }
+}
+
+async function clearSession(sessionId) {
+    if (!confirm(`Are you sure you want to clear/delete session "${sessionId}" from Redis? This will stop the workflow and allow fresh alert re-triggers.`)) {
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${API_BASE}/admin/api/sessions/${sessionId}/clear`, {
+            method: 'POST'
+        });
+        if (response.ok) {
+            showToast(`Session ${sessionId} cleared successfully`, 'success');
+            state.logs.activeSessionId = null;
+            loadSessions();
+            resetDetailPane();
+        } else {
+            showToast('Failed to clear session', 'error');
+        }
+    } catch (e) {
+        console.error('Error clearing session:', e);
+        showToast(`Error: ${e.message}`, 'error');
+    }
+}
+
+function filterSessions() {
+    const query = document.getElementById('sessionSearch').value.trim().toLowerCase();
+    const filtered = state.logs.sessions.filter(session => {
+        const id = (session.session_id || '').toLowerCase();
+        const symptoms = (session.symptoms || '').toLowerCase();
+        const assignee = (session.current_assignee || '').toLowerCase();
+        return id.includes(query) || symptoms.includes(query) || assignee.includes(query);
+    });
+    renderSessionsList(filtered);
+}
+
+function parseTimelineLog(logStr, index) {
+    let agent = "System";
+    let statusClass = "";
+    let time = null;
+    let text = logStr;
+    
+    // Extract ISO timestamp if present
+    const isoRegex = /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)/;
+    const timeMatch = logStr.match(isoRegex);
+    if (timeMatch) {
+        time = timeMatch[1];
+        text = text.replace(/at \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?/, '').trim();
+    }
+    
+    // Identify agent and level
+    if (logStr.startsWith("AlertManager triggered")) {
+        agent = "AlertManager";
+        statusClass = "warning";
+    } else if (logStr.startsWith("Supervisor decision") || logStr.startsWith("Supervisor:")) {
+        agent = "Supervisor";
+        statusClass = logStr.includes("failed") || logStr.includes("exceeded") ? "danger" : "success";
+    } else if (logStr.includes("Analytics Agent")) {
+        agent = "Analytics Agent";
+        statusClass = logStr.includes("failed") ? "danger" : logStr.includes("started") ? "info" : "success";
+    } else if (logStr.includes("Expert Agent")) {
+        agent = "Expert Agent";
+        statusClass = logStr.includes("failed") ? "danger" : logStr.includes("started") ? "info" : "success";
+    } else if (logStr.includes("Customer Advisory Agent")) {
+        agent = "Customer Advisory Agent";
+        statusClass = logStr.includes("failed") ? "danger" : logStr.includes("started") ? "info" : "success";
+    } else {
+        if (logStr.includes("failed") || logStr.includes("error")) {
+            statusClass = "danger";
+        } else if (logStr.includes("started") || logStr.includes("running")) {
+            statusClass = "info";
+        } else if (logStr.includes("finished") || logStr.includes("completed") || logStr.includes("success")) {
+            statusClass = "success";
+        }
+    }
+    
+    let htmlContent = escapeHtml(text);
+    htmlContent = htmlContent.replace(/`([^`]+)`/g, '<code>$1</code>');
+    
+    return {
+        agent,
+        time,
+        content: htmlContent,
+        statusClass
+    };
+}
+
+function renderSessionDetails(session) {
+    const detailPane = document.getElementById('sessionDetailPane');
+    if (!detailPane) return;
+    
+    const sessionId = escapeHtml(session.session_id);
+    const symptoms = escapeHtml(session.symptoms || 'N/A');
+    const alertSource = escapeHtml(session.alert_source || 'N/A');
+    const currentAssignee = escapeHtml(session.current_assignee || 'N/A');
+    const loopCount = session.loop_count || 0;
+    const rcaSummary = escapeHtml(session.rca_summary || 'No root cause identified yet.');
+    const jiraIssueKey = escapeHtml(session.jira_issue_key || 'N/A');
+    const affectedEntities = escapeHtml(Array.isArray(session.affected_entities) ? session.affected_entities.join(', ') : session.affected_entities || 'None');
+    
+    const logs = session.diagnostic_logs || [];
+    let timelineHtml = '<div class="empty-state" style="padding: 20px 0;">No diagnostic logs recorded yet.</div>';
+    
+    if (logs.length > 0) {
+        timelineHtml = `<div class="timeline-container">`;
+        logs.forEach((logStr, index) => {
+            const parsed = parseTimelineLog(logStr, index);
+            timelineHtml += `
+                <div class="timeline-item">
+                    <div class="timeline-dot ${parsed.statusClass}"></div>
+                    <div class="timeline-item-meta">
+                        <span class="timeline-agent">${escapeHtml(parsed.agent)}</span>
+                        ${parsed.time ? `<span class="timeline-time">${escapeHtml(parsed.time)}</span>` : ''}
+                    </div>
+                    <div class="timeline-content">
+                        <div class="timeline-content-body">${parsed.content}</div>
+                    </div>
+                </div>
+            `;
+        });
+        timelineHtml += `</div>`;
+    }
+
+    detailPane.innerHTML = `
+        <div class="detail-header">
+            <div class="detail-header-left">
+                <h2>Session Logs</h2>
+                <p>ID: ${sessionId}</p>
+            </div>
+            <div class="detail-header-right">
+                <button class="btn btn-ghost btn-sm" onclick="loadSessionDetails('${sessionId}')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                    Refresh
+                </button>
+                <button class="btn btn-danger btn-sm" onclick="clearSession('${sessionId}')">Clear Session</button>
+            </div>
+        </div>
+        <div class="detail-body">
+            <div class="info-cards-row">
+                <div class="info-card">
+                    <div class="info-card-label">Assignee</div>
+                    <div class="info-card-value">${currentAssignee}</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-label">Loop Count</div>
+                    <div class="info-card-value">${loopCount} / 5</div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-label">Jira Issue</div>
+                    <div class="info-card-value">
+                        ${jiraIssueKey !== 'N/A' && jiraIssueKey ? `<a href="https://vngcloud-internship.atlassian.net/browse/${jiraIssueKey}" target="_blank" style="color:var(--text-accent); text-decoration:none;">${jiraIssueKey} ↗</a>` : 'N/A'}
+                    </div>
+                </div>
+                <div class="info-card">
+                    <div class="info-card-label">Entities</div>
+                    <div class="info-card-value" title="${affectedEntities}">${affectedEntities}</div>
+                </div>
+            </div>
+
+            <div class="info-card" style="margin-bottom: 20px;">
+                <div class="info-card-label">Symptoms & Summary</div>
+                <div style="font-size: 13px; line-height: 1.5; color: var(--text-primary); margin-bottom: 8px;">${symptoms}</div>
+                <div class="info-card-label" style="margin-top: 12px;">RCA Summary</div>
+                <div style="font-size: 13px; line-height: 1.5; color: var(--text-accent); font-weight: 500;">${rcaSummary}</div>
+            </div>
+
+            <div class="timeline-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                Execution Trace
+            </div>
+            ${timelineHtml}
+        </div>
+    `;
 }

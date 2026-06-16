@@ -42,6 +42,10 @@
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
                     <span>Devices</span>
                 </li>
+                <li class="nav-item" data-tab="logs">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                    <span>AI Session Logs</span>
+                </li>
             </ul>
             <div class="sidebar-footer">
                 <div class="status-badge">
@@ -192,6 +196,34 @@
                         </div>
                     </div>
                     <div class="device-grid" id="deviceGrid"></div>
+                </section>
+
+                <!-- Logs Tab -->
+                <section class="tab-content" id="tab-logs">
+                    <div class="logs-split-container">
+                        <!-- Left pane: Session list -->
+                        <div class="logs-sidebar-pane">
+                            <div class="pane-header">
+                                <h3>Active Sessions</h3>
+                                <button class="btn btn-ghost btn-sm" onclick="loadSessions()">Refresh</button>
+                            </div>
+                            <div class="search-box" style="margin-bottom: 12px; padding: 6px 12px;">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                                <input type="text" id="sessionSearch" placeholder="Search sessions..." oninput="filterSessions()" style="width: 100%; font-size: 13px;">
+                            </div>
+                            <div class="sessions-list" id="sessionsList">
+                                <div class="empty-state">Loading sessions...</div>
+                            </div>
+                        </div>
+
+                        <!-- Right pane: Details & Timeline -->
+                        <div class="logs-detail-pane" id="sessionDetailPane">
+                            <div class="empty-state">
+                                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 17h6M9 12h6M9 7h6"/></svg>
+                                <p>Select an AI Session to view details and live diagnostics timeline</p>
+                            </div>
+                        </div>
+                    </div>
                 </section>
 
             </div>

@@ -1,0 +1,290 @@
+[
+  {
+    "hostname": "LAB_STL.GW.01",
+    "ip": "10.116.0.20",
+    "type": "Juniper",
+    "model": "vmx",
+    "os": "Junos 18.1R3.3",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB-EX4400-TOR",
+    "ip": "10.116.0.158",
+    "type": "Juniper",
+    "model": "ex4400-48t",
+    "os": "Junos 23.4R2.13",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_STL.GW.02",
+    "ip": "10.116.0.21",
+    "type": "Juniper",
+    "model": "vmx",
+    "os": "Junos 18.1R3.3",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_LEAF.01",
+    "ip": "10.116.0.26",
+    "type": "Juniper",
+    "model": "vqfx-10000",
+    "os": "Junos 19.4R1.10 limited",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_SERVICE.02",
+    "ip": "10.116.0.25",
+    "type": "Juniper",
+    "model": "vqfx-10000",
+    "os": "Junos 19.4R1.10 limited",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_LEAF.02",
+    "ip": "10.116.0.27",
+    "type": "Juniper",
+    "model": "vqfx-10000",
+    "os": "Junos 19.4R1.10 limited",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_SERVICE.01",
+    "ip": "10.116.0.24",
+    "type": "Juniper",
+    "model": "vqfx-10000",
+    "os": "Junos 19.4R1.10 limited",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB-VCEX4600-TOR-2",
+    "ip": "10.116.0.11",
+    "type": "Juniper",
+    "model": "ex4600-40f",
+    "os": "Junos 21.4R3-S11.3",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_INTER.01",
+    "ip": "10.116.0.22",
+    "type": "Juniper",
+    "model": "vqfx-10000",
+    "os": "Junos 19.4R1.10 limited",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_INTER.02",
+    "ip": "10.116.0.23",
+    "type": "Juniper",
+    "model": "vqfx-10000",
+    "os": "Junos 19.4R1.10 limited",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_SPINE.01",
+    "ip": "10.116.0.28",
+    "type": "Juniper",
+    "model": "vqfx-10000",
+    "os": "Junos 19.4R1.10 limited",
+    "port_22": true,
+    "port_830": false
+  },
+  {
+    "hostname": "LAB_SUPER_SPINE.02",
+    "ip": "10.116.0.31",
+    "type": "Juniper",
+    "model": "vqfx-10000",
+    "os": "Junos 19.4R1.10 limited",
+    "port_22": true,
+    "port_830": false
+  },
+  {
+    "hostname": "LAB_SPINE.02",
+    "ip": "10.116.0.29",
+    "type": "Juniper",
+    "model": "vqfx-10000",
+    "os": "Junos 19.4R1.10 limited",
+    "port_22": true,
+    "port_830": false
+  },
+  {
+    "hostname": "LAB_STL.GW.02",
+    "ip": "10.116.0.38",
+    "type": "Juniper",
+    "model": "vmx",
+    "os": "Junos 18.1R3.3",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB-SRX-STF-GW-N1",
+    "ip": "10.116.0.34",
+    "type": "Juniper",
+    "model": "vSRX",
+    "os": "Junos 20.1R1.11",
+    "port_22": true,
+    "port_830": false
+  },
+  {
+    "hostname": "LAB_STL.GW.01",
+    "ip": "10.116.0.37",
+    "type": "Juniper",
+    "model": "vmx",
+    "os": "Junos 18.1R3.3",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_INTERNET.02",
+    "ip": "10.116.0.33",
+    "type": "Juniper",
+    "model": "vmx",
+    "os": "Junos 14.1R4.8",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_INTERNET.01",
+    "ip": "10.116.0.32",
+    "type": "Juniper",
+    "model": "vmx",
+    "os": "Junos 14.1R4.8",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_SUPER_SPINE.01",
+    "ip": "10.116.0.30",
+    "type": "Juniper",
+    "model": "vqfx-10000",
+    "os": "Junos 19.4R1.10 limited",
+    "port_22": true,
+    "port_830": false
+  },
+  {
+    "hostname": "LAB-EX4400-01-VNPT",
+    "ip": "10.116.0.54",
+    "type": "Juniper",
+    "model": "ex4400-48t",
+    "os": "Junos 23.4R2.13",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB-QFX10K8-GW-01",
+    "ip": "10.116.0.64",
+    "type": "Juniper",
+    "model": "qfx10008",
+    "os": "Junos 23.4R2-S7.4",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_2BW14.30_QFX5210-64C_SPN.01",
+    "ip": "10.116.1.102",
+    "type": "Juniper",
+    "model": "qfx5210-64c",
+    "os": "Junos 23.4R2-S5.8",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB-SRX-STF-GW-N1",
+    "ip": "10.116.0.36",
+    "type": "Juniper",
+    "model": "vSRX",
+    "os": "Junos 20.1R1.11",
+    "port_22": true,
+    "port_830": false
+  },
+  {
+    "hostname": "LAB_2BW14.27_QFX5210-64C_SPN.02",
+    "ip": "10.116.1.103",
+    "type": "Juniper",
+    "model": "qfx5210-64c",
+    "os": "Junos 20.4R3-S5.4",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "LAB_2BW11.3_QFX5120-48Y_STL.GW.04",
+    "ip": "10.116.1.151",
+    "type": "Juniper",
+    "model": "qfx5120-48y-8c",
+    "os": "Junos 23.4R2-S7.7",
+    "port_22": true,
+    "port_830": false
+  },
+  {
+    "hostname": "LAB_2BW11.18_SRX1500.STF.GW-N0",
+    "ip": "10.116.0.96",
+    "type": "Juniper",
+    "model": "srx1500",
+    "os": "Junos 23.4R2-S4.9",
+    "port_22": true,
+    "port_830": false
+  },
+  {
+    "hostname": "LAB_2BW11.9_QFX5120-48Y_STL.GW.03",
+    "ip": "10.116.1.150",
+    "type": "Juniper",
+    "model": "qfx5120-48y-8c",
+    "os": "Junos 23.4R2-S7.7",
+    "port_22": true,
+    "port_830": false
+  },
+  {
+    "hostname": "LAB_2BW11.11_QFX5120-32C_STL.GW.01",
+    "ip": "10.116.1.98",
+    "type": "Juniper",
+    "model": "qfx5120-32c",
+    "os": "Junos 22.2R3-S3.18",
+    "port_22": true,
+    "port_830": false
+  },
+  {
+    "hostname": "LAB_2BW11.12_QFX5120-32C_STL.GW.02",
+    "ip": "10.116.1.99",
+    "type": "Juniper",
+    "model": "qfx5120-32c",
+    "os": "Junos 22.2R3-S3.18",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "noc-portal-app",
+    "ip": "10.116.0.176",
+    "type": "Ubuntu",
+    "model": "Standard PC (i440FX + PIIX, 1996)",
+    "os": "Ubuntu 24.04.4 LTS",
+    "port_22": false,
+    "port_830": false
+  },
+  {
+    "hostname": "2BW11.36_EX4300_LAB",
+    "ip": "10.116.0.13",
+    "type": "Juniper",
+    "model": "ex4300-48t",
+    "os": "Junos 20.4R3-S10.2",
+    "port_22": true,
+    "port_830": true
+  },
+  {
+    "hostname": "net-monitor",
+    "ip": "10.116.0.175",
+    "type": "Ubuntu",
+    "model": "Standard PC (i440FX + PIIX, 1996)",
+    "os": "Ubuntu 24.04.4 LTS",
+    "port_22": false,
+    "port_830": false
+  }
+]

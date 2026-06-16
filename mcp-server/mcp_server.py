@@ -34,9 +34,23 @@ JIRA_API_TOKEN = os.environ.get("JIRA_API_TOKEN", "")
 JIRA_PROJECT_KEY = os.environ.get("JIRA_PROJECT_KEY", "KAN")
 JIRA_WEBHOOK_SECRET = os.environ.get("JIRA_WEBHOOK_SECRET", "")
 
+# Redis configuration (for session log inspector)
+REDIS_HOST = os.environ.get("REDIS_HOST", "10.116.0.181")
+REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
+REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", None)
+
+import redis
+redis_client = redis.Redis(
+    host="10.116.0.181",
+    port=REDIS_PORT,
+    password=REDIS_PASSWORD,
+    decode_responses=True
+)
+
 # Command database paths
 OPERATION_COMMANDS_DB = os.environ.get("OPERATION_COMMANDS_DB", "/app/db/operation_commands.db")
 CONFIG_STATEMENTS_DB = os.environ.get("CONFIG_STATEMENTS_DB", "/app/db/configuration_statements.db")
+NETWORK_ASSETS_DB = os.environ.get("NETWORK_ASSETS_DB", "/app/db/network_assets.db")
 
 # Knowledge base (future RAG server)
 KNOWLEDGE_BASE_URL = os.environ.get("KNOWLEDGE_BASE_URL", "http://internal-knowledge-base.noc.local")
@@ -1239,6 +1253,492 @@ async def get_device_logs(device_ip: str, limit: int = 10) -> str:
 
 
 # ===================================================================
+# IPAM & NETWORK ASSET TOOLS (NetBox-like API response format)
+# ===================================================================
+
+@mcp.tool()
+def query_netbox_inventory(resource_type: str, query: Optional[str] = None) -> str:
+    """Query NetBox inventory tables (tenants, devices, vlans, interfaces, ip-addresses).
+    Returns a NetBox API-like JSON response structure.
+    
+    Args:
+        resource_type: Type of resource to query. Allowed values: 'tenants', 'devices', 'vlans', 'interfaces', 'ip-addresses'.
+        query: Optional string to filter results (e.g. device name, IP address, VLAN ID, tenant name).
+    """
+    logger.info(f"Executing tool: query_netbox_inventory for resource '{resource_type}' with query '{query}'")
+    
+    res_type = resource_type.lower().strip()
+    if res_type in ["ip-address", "ip-addresses", "ip_addresses", "ip_address", "ips", "ip"]:
+        res_type = "ip-addresses"
+    elif res_type in ["tenant", "tenants"]:
+        res_type = "tenants"
+    elif res_type in ["device", "devices"]:
+        res_type = "devices"
+    elif res_type in ["vlan", "vlans"]:
+        res_type = "vlans"
+    elif res_type in ["interface", "interfaces"]:
+        res_type = "interfaces"
+    else:
+        allowed = ["tenants", "devices", "vlans", "interfaces", "ip-addresses"]
+        return json.dumps({
+            "error": f"Invalid resource_type '{resource_type}'. Allowed: {', '.join(allowed)}"
+        }, indent=2)
+
+    try:
+        conn = sqlite3.connect(NETWORK_ASSETS_DB)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        results = []
+        
+        if res_type == "tenants":
+            sql = "SELECT id, name, slug, description FROM netbox_tenants"
+            params = []
+            if query:
+                sql += " WHERE name LIKE ? OR slug LIKE ? OR description LIKE ?"
+                like_q = f"%{query}%"
+                params = [like_q, like_q, like_q]
+            cur.execute(sql, params)
+            for row in cur.fetchall():
+                results.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "slug": row["slug"],
+                    "description": row["description"]
+                })
+                
+        elif res_type == "devices":
+            sql = """
+                SELECT d.id, d.name, d.model, d.role, d.rack, d.primary_ip, d.tenant_id,
+                       t.name as tenant_name, t.slug as tenant_slug
+                FROM netbox_devices d
+                LEFT JOIN netbox_tenants t ON d.tenant_id = t.id
+            """
+            params = []
+            if query:
+                sql += """ WHERE d.name LIKE ? OR d.model LIKE ? OR d.role LIKE ? 
+                           OR d.rack LIKE ? OR d.primary_ip LIKE ? OR t.name LIKE ?"""
+                like_q = f"%{query}%"
+                params = [like_q, like_q, like_q, like_q, like_q, like_q]
+            cur.execute(sql, params)
+            for row in cur.fetchall():
+                tenant_info = None
+                if row["tenant_id"]:
+                    tenant_info = {
+                        "id": row["tenant_id"],
+                        "name": row["tenant_name"],
+                        "slug": row["tenant_slug"]
+                    }
+                results.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "model": {"name": row["model"]},
+                    "role": {"name": row["role"]},
+                    "rack": {"name": row["rack"]},
+                    "primary_ip": {"address": row["primary_ip"]} if row["primary_ip"] else None,
+                    "tenant": tenant_info
+                })
+                
+        elif res_type == "vlans":
+            sql = """
+                SELECT v.id, v.vid, v.name, v.status, v.tenant_id, v.description,
+                       t.name as tenant_name, t.slug as tenant_slug
+                FROM netbox_vlans v
+                LEFT JOIN netbox_tenants t ON v.tenant_id = t.id
+            """
+            params = []
+            if query:
+                is_num = False
+                try:
+                    int_val = int(query)
+                    is_num = True
+                except ValueError:
+                    pass
+                
+                if is_num:
+                    sql += " WHERE v.vid = ? OR v.name LIKE ? OR t.name LIKE ?"
+                    params = [int_val, f"%{query}%", f"%{query}%"]
+                else:
+                    sql += " WHERE v.name LIKE ? OR t.name LIKE ? OR v.description LIKE ?"
+                    like_q = f"%{query}%"
+                    params = [like_q, like_q, like_q]
+            cur.execute(sql, params)
+            for row in cur.fetchall():
+                tenant_info = None
+                if row["tenant_id"]:
+                    tenant_info = {
+                        "id": row["tenant_id"],
+                        "name": row["tenant_name"],
+                        "slug": row["tenant_slug"]
+                    }
+                results.append({
+                    "id": row["id"],
+                    "vid": row["vid"],
+                    "name": row["name"],
+                    "status": {"value": row["status"], "label": row["status"].capitalize()},
+                    "tenant": tenant_info,
+                    "description": row["description"]
+                })
+                
+        elif res_type == "interfaces":
+            sql = """
+                SELECT i.id, i.name, i.device_id, i.enabled, i.mac_address, i.mode, i.untagged_vlan_id,
+                       d.name as device_name,
+                       v.vid as vlan_vid, v.name as vlan_name
+                FROM netbox_interfaces i
+                LEFT JOIN netbox_devices d ON i.device_id = d.id
+                LEFT JOIN netbox_vlans v ON i.untagged_vlan_id = v.id
+            """
+            params = []
+            if query:
+                sql += " WHERE i.name LIKE ? OR d.name LIKE ? OR i.mac_address LIKE ? OR i.mode LIKE ?"
+                like_q = f"%{query}%"
+                params = [like_q, like_q, like_q, like_q]
+            cur.execute(sql, params)
+            for row in cur.fetchall():
+                vlan_info = None
+                if row["untagged_vlan_id"]:
+                    vlan_info = {
+                        "id": row["untagged_vlan_id"],
+                        "vid": row["vlan_vid"],
+                        "name": row["vlan_name"]
+                    }
+                results.append({
+                    "id": row["id"],
+                    "name": row["name"],
+                    "device": {"id": row["device_id"], "name": row["device_name"]},
+                    "enabled": bool(row["enabled"]),
+                    "mac_address": row["mac_address"],
+                    "mode": {"value": row["mode"], "label": row["mode"].capitalize()} if row["mode"] else None,
+                    "untagged_vlan": vlan_info
+                })
+                
+        elif res_type == "ip-addresses":
+            sql = """
+                SELECT ip.id, ip.address, ip.status, ip.assigned_interface_id, ip.tenant_id, ip.description,
+                       t.name as tenant_name, t.slug as tenant_slug,
+                       i.name as interface_name, i.device_id,
+                       d.name as device_name
+                FROM netbox_ip_addresses ip
+                LEFT JOIN netbox_tenants t ON ip.tenant_id = t.id
+                LEFT JOIN netbox_interfaces i ON ip.assigned_interface_id = i.id
+                LEFT JOIN netbox_devices d ON i.device_id = d.id
+            """
+            params = []
+            if query:
+                sql += " WHERE ip.address LIKE ? OR ip.description LIKE ? OR t.name LIKE ? OR d.name LIKE ?"
+                like_q = f"%{query}%"
+                params = [like_q, like_q, like_q, like_q]
+            cur.execute(sql, params)
+            for row in cur.fetchall():
+                tenant_info = None
+                if row["tenant_id"]:
+                    tenant_info = {
+                        "id": row["tenant_id"],
+                        "name": row["tenant_name"],
+                        "slug": row["tenant_slug"]
+                    }
+                assigned_obj = None
+                if row["assigned_interface_id"]:
+                    assigned_obj = {
+                        "id": row["assigned_interface_id"],
+                        "name": row["interface_name"],
+                        "device": {
+                            "id": row["device_id"],
+                            "name": row["device_name"]
+                        }
+                    }
+                results.append({
+                    "id": row["id"],
+                    "address": row["address"],
+                    "status": {"value": row["status"], "label": row["status"].capitalize()},
+                    "assigned_object": assigned_obj,
+                    "tenant": tenant_info,
+                    "description": row["description"]
+                })
+                
+        conn.close()
+        return json.dumps({
+            "count": len(results),
+            "results": results
+        }, indent=2, ensure_ascii=False)
+        
+    except Exception as e:
+        logger.error(f"Error executing query_netbox_inventory: {e}")
+        return json.dumps({"error": str(e)}, indent=2)
+
+@mcp.tool()
+def query_vlan_ip(vlan_id: Optional[int] = None, subnet: Optional[str] = None) -> str:
+    """Query VLANs and IP addresses from the network assets.
+    Returns NetBox API-like JSON structures.
+    """
+    logger.info(f"Executing tool: query_vlan_ip vlan_id={vlan_id}, subnet={subnet}")
+    try:
+        conn = sqlite3.connect(NETWORK_ASSETS_DB)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        vlans = []
+        ip_addresses = []
+        
+        vlan_sql = """
+            SELECT v.id, v.vid, v.name, v.status, v.tenant_id, v.description,
+                   t.name as tenant_name, t.slug as tenant_slug
+            FROM netbox_vlans v
+            LEFT JOIN netbox_tenants t ON v.tenant_id = t.id
+        """
+        vlan_params = []
+        if vlan_id is not None:
+            vlan_sql += " WHERE v.vid = ?"
+            vlan_params.append(vlan_id)
+        cur.execute(vlan_sql, vlan_params)
+        for row in cur.fetchall():
+            vlans.append({
+                "id": row["id"],
+                "vid": row["vid"],
+                "name": row["name"],
+                "status": {"value": row["status"], "label": row["status"].capitalize()},
+                "tenant": {
+                    "id": row["tenant_id"],
+                    "name": row["tenant_name"],
+                    "slug": row["tenant_slug"]
+                } if row["tenant_id"] else None,
+                "description": row["description"]
+            })
+            
+        ip_sql = """
+            SELECT ip.id, ip.address, ip.status, ip.assigned_interface_id, ip.tenant_id, ip.description,
+                   t.name as tenant_name, t.slug as tenant_slug,
+                   i.name as interface_name, i.device_id,
+                   d.name as device_name
+            FROM netbox_ip_addresses ip
+            LEFT JOIN netbox_tenants t ON ip.tenant_id = t.id
+            LEFT JOIN netbox_interfaces i ON ip.assigned_interface_id = i.id
+            LEFT JOIN netbox_devices d ON i.device_id = d.id
+        """
+        ip_params = []
+        if subnet is not None:
+            ip_sql += " WHERE ip.address LIKE ?"
+            ip_params.append(f"{subnet}%")
+        cur.execute(ip_sql, ip_params)
+        for row in cur.fetchall():
+            ip_addresses.append({
+                "id": row["id"],
+                "address": row["address"],
+                "status": {"value": row["status"], "label": row["status"].capitalize()},
+                "assigned_object": {
+                    "id": row["assigned_interface_id"],
+                    "name": row["interface_name"],
+                    "device": {
+                        "id": row["device_id"],
+                        "name": row["device_name"]
+                    }
+                } if row["assigned_interface_id"] else None,
+                "tenant": {
+                    "id": row["tenant_id"],
+                    "name": row["tenant_name"],
+                    "slug": row["tenant_slug"]
+                } if row["tenant_id"] else None,
+                "description": row["description"]
+            })
+            
+        conn.close()
+        return json.dumps({
+            "vlans": vlans,
+            "ip_addresses": ip_addresses
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error executing query_vlan_ip: {e}")
+        return json.dumps({"error": str(e)}, indent=2)
+
+@mcp.tool()
+def query_servers(hostname: Optional[str] = None, ip_address: Optional[str] = None) -> str:
+    """Query server devices from the network assets database.
+    Returns NetBox API-like JSON response structure.
+    """
+    logger.info(f"Executing tool: query_servers hostname={hostname}, ip_address={ip_address}")
+    try:
+        conn = sqlite3.connect(NETWORK_ASSETS_DB)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        sql = """
+            SELECT d.id, d.name, d.model, d.role, d.rack, d.primary_ip, d.tenant_id,
+                   t.name as tenant_name, t.slug as tenant_slug
+            FROM netbox_devices d
+            LEFT JOIN netbox_tenants t ON d.tenant_id = t.id
+            WHERE d.role = 'Server'
+        """
+        params = []
+        if hostname:
+            sql += " AND d.name LIKE ?"
+            params.append(f"%{hostname}%")
+        if ip_address:
+            sql += " AND d.primary_ip LIKE ?"
+            params.append(f"%{ip_address}%")
+            
+        cur.execute(sql, params)
+        results = []
+        for row in cur.fetchall():
+            results.append({
+                "id": row["id"],
+                "name": row["name"],
+                "model": {"name": row["model"]},
+                "role": {"name": row["role"]},
+                "rack": {"name": row["rack"]},
+                "primary_ip": {"address": row["primary_ip"]} if row["primary_ip"] else None,
+                "tenant": {
+                    "id": row["tenant_id"],
+                    "name": row["tenant_name"],
+                    "slug": row["tenant_slug"]
+                } if row["tenant_id"] else None
+            })
+            
+        conn.close()
+        return json.dumps({
+            "count": len(results),
+            "results": results
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error executing query_servers: {e}")
+        return json.dumps({"error": str(e)}, indent=2)
+
+@mcp.tool()
+def query_customers(customer_id: Optional[int] = None, name_query: Optional[str] = None) -> str:
+    """Query customer tenants from the network assets database.
+    Returns NetBox API-like JSON response structure.
+    """
+    logger.info(f"Executing tool: query_customers customer_id={customer_id}, name_query={name_query}")
+    try:
+        conn = sqlite3.connect(NETWORK_ASSETS_DB)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        sql = "SELECT id, name, slug, description FROM netbox_tenants WHERE 1=1"
+        params = []
+        if customer_id is not None:
+            sql += " AND id = ?"
+            params.append(customer_id)
+        if name_query:
+            sql += " AND (name LIKE ? OR slug LIKE ?)"
+            like_q = f"%{name_query}%"
+            params.extend([like_q, like_q])
+            
+        cur.execute(sql, params)
+        results = []
+        for row in cur.fetchall():
+            results.append({
+                "id": row["id"],
+                "name": row["name"],
+                "slug": row["slug"],
+                "description": row["description"]
+            })
+            
+        conn.close()
+        return json.dumps({
+            "count": len(results),
+            "results": results
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error executing query_customers: {e}")
+        return json.dumps({"error": str(e)}, indent=2)
+
+def _query_impl_licenses(device_name: Optional[str] = None) -> str:
+    try:
+        conn = sqlite3.connect(NETWORK_ASSETS_DB)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        sql = "SELECT id, device_name, license_key, features, expiry_date, status FROM licenses WHERE 1=1"
+        params = []
+        if device_name:
+            sql += " AND device_name LIKE ?"
+            params.append(f"%{device_name}%")
+            
+        cur.execute(sql, params)
+        results = []
+        for row in cur.fetchall():
+            results.append({
+                "id": row["id"],
+                "device_name": row["device_name"],
+                "license_key": row["license_key"],
+                "features": row["features"],
+                "expiry_date": row["expiry_date"],
+                "status": row["status"]
+            })
+            
+        conn.close()
+        return json.dumps({
+            "count": len(results),
+            "results": results
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error querying licenses: {e}")
+        return json.dumps({"error": str(e)}, indent=2)
+
+@mcp.tool()
+def query_licenses(device_name: Optional[str] = None) -> str:
+    """Query device license details from the database.
+    
+    Args:
+        device_name: Optional device name to filter by.
+    """
+    logger.info(f"Executing tool: query_licenses device_name={device_name}")
+    return _query_impl_licenses(device_name)
+
+@mcp.tool()
+def query_device_licenses(device_name: Optional[str] = None) -> str:
+    """Query device license details from the database.
+    
+    Args:
+        device_name: Optional device name to filter by.
+    """
+    logger.info(f"Executing tool: query_device_licenses device_name={device_name}")
+    return _query_impl_licenses(device_name)
+
+@mcp.tool()
+def query_device_warranty(device_name: Optional[str] = None) -> str:
+    """Query device hardware warranty details from the database.
+    
+    Args:
+        device_name: Optional device name to filter by.
+    """
+    logger.info(f"Executing tool: query_device_warranty device_name={device_name}")
+    try:
+        conn = sqlite3.connect(NETWORK_ASSETS_DB)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        
+        sql = "SELECT id, device_name, serial_number, warranty_package, start_date, end_date, status FROM device_warranty WHERE 1=1"
+        params = []
+        if device_name:
+            sql += " AND device_name LIKE ?"
+            params.append(f"%{device_name}%")
+            
+        cur.execute(sql, params)
+        results = []
+        for row in cur.fetchall():
+            results.append({
+                "id": row["id"],
+                "device_name": row["device_name"],
+                "serial_number": row["serial_number"],
+                "warranty_package": row["warranty_package"],
+                "start_date": row["start_date"],
+                "end_date": row["end_date"],
+                "status": row["status"]
+            })
+            
+        conn.close()
+        return json.dumps({
+            "count": len(results),
+            "results": results
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error executing query_device_warranty: {e}")
+        return json.dumps({"error": str(e)}, indent=2)
+
+
+# ===================================================================
 # WEBHOOK HANDLER: Jira Approval → Config Push (Slow-Track completion)
 # ===================================================================
 
@@ -1380,9 +1880,10 @@ def _update_jira_issue_status(issue_key: str, success: bool, log_text: str):
         )
         if resp.status_code == 200:
             transitions = resp.json().get("transitions", [])
-            target_name = "done" if success else "error"
+            target_names = ["done", "resolved"] if success else ["error", "failed"]
             for t in transitions:
-                if target_name in t["name"].lower():
+                t_name_lower = t["name"].lower()
+                if any(name in t_name_lower for name in target_names):
                     req_lib.post(
                         transitions_url,
                         json={"transition": {"id": t["id"]}},
@@ -1480,6 +1981,8 @@ if __name__ == "__main__":
                 for node in block.get("content", []):
                     if node.get("type") == "text":
                         full_text += node.get("text", "")
+                    elif node.get("type") == "hardBreak":
+                        full_text += "\n"
                 full_text += "\n"
 
             # Parse device and config from structured description
@@ -1720,7 +2223,50 @@ if __name__ == "__main__":
         except Exception as e:
             logger.error(f"Failed to save devices.json: {e}")
 
-        return JSONResponse({"status": "ok", "name": name})
+    async def admin_get_sessions(request: Request) -> JSONResponse:
+        """List all AI agent session states from Redis."""
+        try:
+            keys = redis_client.keys("state:*")
+            sessions = []
+            for key in keys:
+                session_id = key.split("state:", 1)[1]
+                data = redis_client.get(key)
+                if data:
+                    try:
+                        session_data = json.loads(data)
+                        sessions.append(session_data)
+                    except json.JSONDecodeError:
+                        sessions.append({
+                            "session_id": session_id,
+                            "error": "Failed to decode state JSON"
+                        })
+            sessions.sort(key=lambda s: s.get("session_id", ""), reverse=True)
+            return JSONResponse(sessions)
+        except Exception as e:
+            logger.error(f"Failed to get Redis sessions: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    async def admin_get_session(request: Request) -> JSONResponse:
+        """Get details of a specific session."""
+        session_id = request.path_params["session_id"]
+        try:
+            data = redis_client.get(f"state:{session_id}")
+            if not data:
+                return JSONResponse({"error": f"Session {session_id} not found"}, status_code=404)
+            return JSONResponse(json.loads(data))
+        except Exception as e:
+            logger.error(f"Failed to get session {session_id}: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    async def admin_clear_session(request: Request) -> JSONResponse:
+        """Delete/clear a session in Redis."""
+        session_id = request.path_params["session_id"]
+        try:
+            res = redis_client.delete(f"state:{session_id}")
+            return JSONResponse({"status": "ok", "deleted": bool(res)})
+        except Exception as e:
+            logger.error(f"Failed to delete session {session_id}: {e}")
+            return JSONResponse({"error": str(e)}, status_code=500)
 
     # Admin static files
     from starlette.staticfiles import StaticFiles
@@ -1734,6 +2280,9 @@ if __name__ == "__main__":
         Route("/admin/api/configurations/{id:int}", admin_update_configuration, methods=["PUT"]),
         Route("/admin/api/devices", admin_get_devices, methods=["GET"]),
         Route("/admin/api/devices", admin_add_device, methods=["POST"]),
+        Route("/admin/api/sessions", admin_get_sessions, methods=["GET"]),
+        Route("/admin/api/sessions/{session_id}", admin_get_session, methods=["GET"]),
+        Route("/admin/api/sessions/{session_id}/clear", admin_clear_session, methods=["POST"]),
     ]
 
     logger.info(f"Starting FastMCP server with SSE transport on port {MCP_PORT}...")

@@ -1,5 +1,18 @@
 services:
   # ============================================
+  # Redis Database for Shared Agent State
+  # Runs on local/on-prem machine, accessible via VM LAN IP 49.213.77.222
+  # ============================================
+  redis:
+    image: redis:alpine
+    container_name: netbot-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    networks:
+      - mcp-net
+
+  # ============================================
   # MCP Server — Juniper NETCONF Gateway
   # Runs on local/on-prem machine with access to lab network (IP LAN range)
   # ============================================
@@ -35,3 +48,4 @@ services:
 networks:
   mcp-net:
     driver: bridge
+
