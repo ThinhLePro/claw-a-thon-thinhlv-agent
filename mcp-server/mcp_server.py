@@ -197,49 +197,6 @@ def execute_command_on_device(device_name: str, command: str, timeout: int = Non
     Returns:
         Command output as string.
     """
-    device_name_clean = device_name.upper().strip()
-    if device_name_clean == "LAB-INTERNET-GATEWAY-01" or device_name_clean == "10.116.0.54":
-        command_clean = command.strip().lower()
-        if "ge-0/0/47" in command_clean and "rate" in command_clean:
-            return """  Input rate     : 965526632 bps (216291 pps)
-  Output rate    : 0 bps (0 pps)"""
-        elif "ge-0/0/47" in command_clean:
-            return """Physical interface: ge-0/0/47, Enabled, Physical link is Up
-  Description: ge-0/0/47 - Customer-001 Proxy Server Link
-  Link-level type: Ethernet, MTU: 1514, Speed: 1Gbps, Loopback: None
-  Input rate     : 965526632 bps (216291 pps)
-  Output rate    : 0 bps (0 pps)"""
-        elif "show configuration" in command_clean:
-            return """interfaces {
-    ge-0/0/47 {
-        description "ge-0/0/47 - Customer-001 Proxy Server Link";
-        unit 0 {
-            family inet {
-                address 14.238.122.1/24;
-            }
-        }
-    }
-}"""
-        elif "show route" in command_clean:
-            return """inet.0: 12 destinations, 12 routes (12 active, 0 holddown, 0 hidden)
-+ = Active Route, - = Last Active, * = Both
-
-14.238.122.0/24    *[Direct/0] 14w3d 02:14:00
-                    > via ge-0/0/47.0
-14.238.122.111/32  *[Static/5] 00:30:15
-                    > via 14.238.122.111 (ge-0/0/47.0)"""
-        elif "arp" in command_clean:
-            return """MAC Address       Address         Interface     Flags
-00:50:56:00:11:aa 14.238.122.111  ge-0/0/47.0   none"""
-        elif "ping" in command_clean:
-            return """PING 14.238.122.111 (14.238.122.111): 56 data bytes
-64 bytes from 14.238.122.111: icmp_seq=0 ttl=64 time=1.245 ms
-64 bytes from 14.238.122.111: icmp_seq=1 ttl=64 time=1.110 ms
---- 14.238.122.111 ping statistics ---
-2 packets transmitted, 2 packets received, 0% packet loss
-round-trip min/avg/max/stddev = 1.110/1.177/1.245/0.068 ms"""
-        else:
-            return f"Mocked output for command '{command}' on LAB-INTERNET-GATEWAY-01"
 
     device_info = _resolve_device_info(device_name)
     connection_method = device_info.get("connection_method", "netconf")
@@ -424,6 +381,20 @@ def initialize_tool_acls():
                 "execute_device_command",
                 "check_device_alarms",
                 "get_device_logs",
+                "slack_react_message",
+                "slack_check_user_profile",
+                "slack_send_file",
+                "slack_read_file",
+                "slack_send_url",
+                "read_url",
+                "slack_reply_in_thread",
+                "slack_update_message",
+                "slack_mention_user_or_group",
+                "slack_create_channel",
+                "slack_invite_to_channel",
+                "slack_send_block_kit",
+                "slack_get_channel_history",
+                "slack_view_status",
             ],
             "senior-network-engineer-agent": [
                 "update_task_status", 
@@ -451,6 +422,20 @@ def initialize_tool_acls():
                 "query_licenses",
                 "query_device_warranty",
                 "send_notification",
+                "slack_react_message",
+                "slack_check_user_profile",
+                "slack_send_file",
+                "slack_read_file",
+                "slack_send_url",
+                "read_url",
+                "slack_reply_in_thread",
+                "slack_update_message",
+                "slack_mention_user_or_group",
+                "slack_create_channel",
+                "slack_invite_to_channel",
+                "slack_send_block_kit",
+                "slack_get_channel_history",
+                "slack_view_status",
             ],
             "customer-advisory-agent": [
                 "update_task_status", 
@@ -458,6 +443,20 @@ def initialize_tool_acls():
                 "remove_jira_task",
                 "check_task_status",
                 "send_notification",
+                "slack_react_message",
+                "slack_check_user_profile",
+                "slack_send_file",
+                "slack_read_file",
+                "slack_send_url",
+                "read_url",
+                "slack_reply_in_thread",
+                "slack_update_message",
+                "slack_mention_user_or_group",
+                "slack_create_channel",
+                "slack_invite_to_channel",
+                "slack_send_block_kit",
+                "slack_get_channel_history",
+                "slack_view_status",
             ]
         }
         for agent, tools_list in acl_map.items():
@@ -563,28 +562,6 @@ def get_device_config(device_name: str, config_type: str = "active") -> str:
         config_type: Hierarchy block to filter config (e.g. 'interfaces', 'protocols bgp', 'policy-options'). Defaults to 'active' (entire config).
     """
     logger.info(f"Executing tool: get_device_configuration_detail for {device_name} (filter: {config_type})")
-    device_name_clean = device_name.upper().strip()
-    if device_name_clean == "LAB-INTERNET-GATEWAY-01" or device_name_clean == "10.116.0.54":
-        mock_config = """interfaces {
-    ge-0/0/47 {
-        description "ge-0/0/47 - Customer-001 Proxy Server Link";
-        unit 0 {
-            family inet {
-                address 14.238.122.1/24;
-            }
-        }
-    }
-}
-protocols {
-    bgp {
-        group EBGP-CUSTOMER {
-            type external;
-            peer-as 65001;
-            neighbor 14.238.122.111;
-        }
-    }
-}"""
-        return f"--- Configuration for {device_name} (filter: '{config_type}') ---\n{mock_config}"
     try:
         dev = pool.get(device_name)
 
@@ -1252,18 +1229,6 @@ def ping_from_device(device_name: str, destination: str, count: int = 5) -> str:
         count: Number of ping packets (default 5).
     """
     logger.info(f"Executing tool: ping_from_device from {device_name} to {destination}")
-    device_name_clean = device_name.upper().strip()
-    if (device_name_clean == "LAB-INTERNET-GATEWAY-01" or device_name_clean == "10.116.0.54") and destination == "14.238.122.111":
-        return """--- Ping from LAB-INTERNET-GATEWAY-01 to 14.238.122.111 ---
-PING 14.238.122.111 (14.238.122.111): 56 data bytes
-64 bytes from 14.238.122.111: icmp_seq=0 ttl=64 time=1.245 ms
-64 bytes from 14.238.122.111: icmp_seq=1 ttl=64 time=1.110 ms
-64 bytes from 14.238.122.111: icmp_seq=2 ttl=64 time=1.150 ms
-64 bytes from 14.238.122.111: icmp_seq=3 ttl=64 time=1.120 ms
-64 bytes from 14.238.122.111: icmp_seq=4 ttl=64 time=1.180 ms
---- 14.238.122.111 ping statistics ---
-5 packets transmitted, 5 packets received, 0% packet loss
-round-trip min/avg/max/stddev = 1.110/1.161/1.245/0.048 ms"""
     try:
         dev = pool.get(device_name)
         res = dev.rpc.cli(f"ping {destination} count {count} rapid", format='text')
@@ -1554,19 +1519,26 @@ def _parse_time_range(time_range: str) -> int:
 
 
 @mcp.tool()
-def send_notification(audience_type: str, message: str) -> str:
+def send_notification(audience_type: str, message: str, session_id: str = "") -> str:
     """Send a notification to a specific audience channel via Slack.
 
     Use this tool to notify L3 Human Engineers or Customers about incidents,
     status updates, RCA reports, or escalations.
+
+    When audience_type is 'Customer' and a session_id is provided, this tool
+    automatically marks the session as 'closure_notified' in Redis to prevent
+    duplicate notifications from the Supervisor fallback mechanism.
 
     Args:
         audience_type: Target audience. Must be one of:
             - "L3_Engineer": Internal L3 NOC Human Engineers (Slack: #noc-l3-alerts)
             - "Customer": Customer-facing channel (Slack: #all-customer-001)
         message: The notification message content to send.
+        session_id: Optional session ID. If provided and audience_type is 'Customer',
+                    the session state in Redis will be updated with closure_notified=True
+                    to prevent duplicate closure notifications.
     """
-    logger.info(f"Executing tool: send_notification to {audience_type}")
+    logger.info(f"Executing tool: send_notification to {audience_type} (session: {session_id or 'N/A'})")
 
     slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
     if not slack_token:
@@ -1598,6 +1570,37 @@ def send_notification(audience_type: str, message: str) -> str:
         resp_json = resp.json()
         if resp.status_code == 200 and resp_json.get("ok"):
             logger.info(f"Notification sent to {channel} ({audience_type})")
+            
+            # Auto-set closure_notified flag in Redis when notifying Customer
+            if aud == "customer" and session_id:
+                try:
+                    state_key = f"state:{session_id}"
+                    state_data = redis_client.get(state_key)
+                    if state_data:
+                        state = json.loads(state_data)
+                        state["closure_notified"] = True
+                        redis_client.set(state_key, json.dumps(state))
+                        logger.info(f"Set closure_notified=True for session {session_id}")
+                except Exception as redis_ex:
+                    logger.warning(f"Failed to set closure_notified flag in Redis: {redis_ex}")
+            
+            # Also try to find and flag session even without explicit session_id
+            # by scanning recent active sessions (best-effort for backward compatibility)
+            if aud == "customer" and not session_id:
+                try:
+                    for key in redis_client.scan_iter("state:*"):
+                        data_str = redis_client.get(key)
+                        if data_str:
+                            state = json.loads(data_str)
+                            if state.get("current_assignee") in ("customer-advisory-agent", "FINISH") and not state.get("closure_notified"):
+                                state["closure_notified"] = True
+                                redis_client.set(key, json.dumps(state))
+                                sid = key.replace("state:", "") if isinstance(key, str) else key.decode().replace("state:", "")
+                                logger.info(f"Auto-flagged closure_notified=True for active session {sid}")
+                                break  # Only flag the most relevant session
+                except Exception as scan_ex:
+                    logger.warning(f"Best-effort session scan failed: {scan_ex}")
+            
             return f"✅ Notification sent successfully to Slack channel {channel} ({audience_type})."
         else:
             error = resp_json.get("error", resp.text[:200])
@@ -1605,6 +1608,657 @@ def send_notification(audience_type: str, message: str) -> str:
     except Exception as e:
         logger.error(f"send_notification exception: {e}")
         return f"Error sending Slack notification: {e}"
+
+
+@mcp.tool()
+def slack_react_message(channel_id: str, message_ts: str, emoji_name: str) -> str:
+    """Add a reaction emoji (e.g. thumbsup, white_check_mark) to a Slack message.
+    
+    Args:
+        channel_id: The Slack Channel ID where the message resides.
+        message_ts: The timestamp (ts) of the message to react to.
+        emoji_name: The name of the emoji (without colons, e.g. 'thumbsup').
+    """
+    logger.info(f"slack_react_message tool called: channel={channel_id}, ts={message_ts}, emoji={emoji_name}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+    
+    url = "https://slack.com/api/reactions.add"
+    headers = {
+        "Authorization": f"Bearer {slack_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "channel": channel_id,
+        "timestamp": message_ts,
+        "name": emoji_name
+    }
+    try:
+        resp = req_lib.post(url, json=payload, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("ok"):
+            return f"Success: Reacted with :{emoji_name}: to message {message_ts}."
+        else:
+            return f"Failed to react: {data.get('error')}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_check_user_profile(user_id: str) -> str:
+    """Get detailed Slack user profile information including full name, email, and title.
+    
+    Args:
+        user_id: The Slack User ID (e.g. U0123456789).
+    """
+    logger.info(f"slack_check_user_profile tool called: user_id={user_id}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+    
+    url = "https://slack.com/api/users.info"
+    headers = {"Authorization": f"Bearer {slack_token}"}
+    try:
+        resp = req_lib.get(url, headers=headers, params={"user": user_id}, timeout=10)
+        data = resp.json()
+        if data.get("ok"):
+            user = data["user"]
+            profile = user.get("profile", {})
+            info = {
+                "id": user["id"],
+                "name": user["name"],
+                "real_name": user.get("real_name") or profile.get("real_name") or profile.get("real_name_normalized"),
+                "display_name": profile.get("display_name") or profile.get("display_name_normalized"),
+                "email": profile.get("email"),
+                "title": profile.get("title"),
+                "status_text": profile.get("status_text"),
+                "status_emoji": profile.get("status_emoji"),
+                "is_bot": user.get("is_bot"),
+                "is_admin": user.get("is_admin")
+            }
+            return json.dumps(info, indent=2, ensure_ascii=False)
+        else:
+            return f"Error retrieving user info: {data.get('error')}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_view_status(user_id: str) -> str:
+    """Get the presence status (active/away) of a user in Slack.
+    
+    Args:
+        user_id: The Slack User ID (e.g. U0123456789).
+    """
+    logger.info(f"slack_view_status tool called: user_id={user_id}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+    
+    url = "https://slack.com/api/users.getPresence"
+    headers = {"Authorization": f"Bearer {slack_token}"}
+    try:
+        resp = req_lib.get(url, headers=headers, params={"user": user_id}, timeout=10)
+        data = resp.json()
+        if data.get("ok"):
+            return f"User {user_id} presence status: {data.get('presence')}"
+        else:
+            return f"Failed to get presence: {data.get('error')}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_send_file(channel_id: str, file_path: str, title: str = "", initial_comment: str = "") -> str:
+    """Upload and share a file from the server disk to a Slack channel.
+    
+    Args:
+        channel_id: The Slack Channel ID to send the file to.
+        file_path: Absolute or relative path of the file to send.
+        title: Title of the file.
+        initial_comment: Optional comment to post with the file.
+    """
+    logger.info(f"slack_send_file tool called: channel={channel_id}, file={file_path}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+        
+    resolved = os.path.abspath(file_path)
+    if not os.path.exists(resolved):
+        return f"Error: File not found: {file_path}"
+        
+    filename = os.path.basename(resolved)
+    try:
+        file_size = os.path.getsize(resolved)
+        
+        # Step 1: Call files.getUploadURLExternal
+        url_get_upload = "https://slack.com/api/files.getUploadURLExternal"
+        headers = {"Authorization": f"Bearer {slack_token}"}
+        params = {"filename": filename, "length": file_size}
+        
+        resp_get = req_lib.get(url_get_upload, headers=headers, params=params, timeout=10)
+        data_get = resp_get.json()
+        if not data_get.get("ok"):
+            return f"Failed to get upload URL: {data_get.get('error')}"
+            
+        upload_url = data_get["upload_url"]
+        file_id = data_get["file_id"]
+        
+        # Step 2: Upload the binary data to the upload URL
+        with open(resolved, 'rb') as f:
+            file_data = f.read()
+        resp_upload = req_lib.post(upload_url, files={"file": (filename, file_data)}, timeout=30)
+        if resp_upload.status_code != 200:
+            return f"Failed uploading file content: HTTP {resp_upload.status_code}"
+            
+        # Step 3: Call files.completeUploadExternal
+        url_complete = "https://slack.com/api/files.completeUploadExternal"
+        complete_payload = {
+            "files": [{"id": file_id, "title": title or filename}],
+            "channel_id": channel_id
+        }
+        if initial_comment:
+            complete_payload["initial_comment"] = initial_comment
+            
+        resp_complete = req_lib.post(url_complete, json=complete_payload, headers=headers, timeout=15)
+        data_complete = resp_complete.json()
+        if data_complete.get("ok"):
+            return f"Success: File '{filename}' uploaded and shared to channel {channel_id}."
+        else:
+            return f"Failed to complete upload: {data_complete.get('error')}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_read_file(file_id: str) -> str:
+    """Retrieve details and textual content of a shared Slack file.
+    
+    Args:
+        file_id: The Slack File ID (e.g. F0123456789).
+    """
+    logger.info(f"slack_read_file tool called: file_id={file_id}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+        
+    headers = {"Authorization": f"Bearer {slack_token}"}
+    try:
+        url_info = "https://slack.com/api/files.info"
+        resp_info = req_lib.get(url_info, headers=headers, params={"file": file_id}, timeout=10)
+        data_info = resp_info.json()
+        if not data_info.get("ok"):
+            return f"Failed to get file info: {data_info.get('error')}"
+            
+        file_meta = data_info["file"]
+        download_url = file_meta.get("url_private_download")
+        if not download_url:
+            return f"File metadata retrieved, but no private download URL found: {json.dumps(file_meta, indent=2)}"
+            
+        resp_dl = req_lib.get(download_url, headers=headers, timeout=20)
+        if resp_dl.status_code == 200:
+            content_type = resp_dl.headers.get("Content-Type", "")
+            if "text" in content_type or "json" in content_type or "javascript" in content_type:
+                text_content = resp_dl.text[:20000]
+                truncated = " [TRUNCATED]" if len(resp_dl.text) > 20000 else ""
+                return f"File: {file_meta.get('name')} | Type: {file_meta.get('mimetype')}\nContent{truncated}:\n{text_content}"
+            else:
+                return f"File: {file_meta.get('name')} | Type: {file_meta.get('mimetype')} | Size: {file_meta.get('size')} bytes (Binary content, not printed)."
+        else:
+            return f"Failed to download file content: HTTP {resp_dl.status_code}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_send_url(channel_id: str, url: str, message: str = "") -> str:
+    """Send a URL link with an optional message to a Slack channel.
+    
+    Args:
+        channel_id: The Slack Channel ID to send the link to.
+        url: The URL link to share.
+        message: Optional text message to send along with the link.
+    """
+    logger.info(f"slack_send_url tool called: channel={channel_id}, url={url}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+        
+    text_content = f"{message}\n{url}" if message else url
+    url_post = "https://slack.com/api/chat.postMessage"
+    headers = {
+        "Authorization": f"Bearer {slack_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "channel": channel_id,
+        "text": text_content
+    }
+    try:
+        resp = req_lib.post(url_post, json=payload, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("ok"):
+            return f"Success: Shared URL '{url}' to channel {channel_id}."
+        else:
+            return f"Failed to send URL: {data.get('error')}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def read_url(url: str) -> str:
+    """Fetch content of a URL and parse it into human-readable text.
+    
+    Args:
+        url: The web URL to download and read.
+    """
+    logger.info(f"read_url tool called: url={url}")
+    try:
+        import re
+        import html
+        resp = req_lib.get(url, timeout=15)
+        if resp.status_code != 200:
+            return f"Error: HTTP {resp.status_code}"
+            
+        html_content = resp.text
+        # Remove script and style blocks
+        html_content = re.sub(r'<(script|style).*?>.*?</\1>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        # Strip HTML tags
+        text = re.sub(r'<[^>]*>', ' ', html_content)
+        # Unescape HTML entities
+        text = html.unescape(text)
+        # Collapse whitespace
+        text = re.sub(r'\s+', ' ', text).strip()
+        
+        truncated = text[:20000]
+        if len(text) > 20000:
+            truncated += "\n... [Content Truncated]"
+        return truncated
+    except Exception as e:
+        return f"Error: {e}"
+
+
+# ===================================================================
+# ADVANCED SLACK INTERACTION TOOLS (Natural Communication)
+# ===================================================================
+
+@mcp.tool()
+def slack_reply_in_thread(channel_id: str, thread_ts: str, message: str) -> str:
+    """Reply directly into a Slack thread (threaded reply) instead of posting to main channel.
+    
+    Use this to keep conversations organized and avoid flooding the main channel.
+    Before replying, this tool automatically fetches the last 10 messages in the thread
+    to provide conversation context.
+    
+    Args:
+        channel_id: The Slack Channel ID where the thread exists.
+        thread_ts: The timestamp (ts) of the parent/root message of the thread.
+        message: The reply message content.
+    """
+    logger.info(f"slack_reply_in_thread tool called: channel={channel_id}, thread_ts={thread_ts}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+    
+    headers = {
+        "Authorization": f"Bearer {slack_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    
+    # Step 1: Fetch conversation context (last 10 messages in thread)
+    context_messages = []
+    try:
+        history_url = "https://slack.com/api/conversations.replies"
+        history_params = {
+            "channel": channel_id,
+            "ts": thread_ts,
+            "limit": 10
+        }
+        hist_resp = req_lib.get(history_url, headers={"Authorization": f"Bearer {slack_token}"}, params=history_params, timeout=10)
+        hist_data = hist_resp.json()
+        if hist_data.get("ok"):
+            for msg in hist_data.get("messages", []):
+                user = msg.get("user", "bot")
+                text = msg.get("text", "")
+                context_messages.append(f"[{user}]: {text}")
+            logger.info(f"Thread context: fetched {len(context_messages)} messages for thread {thread_ts}")
+    except Exception as e:
+        logger.warning(f"Failed to fetch thread context: {e}")
+    
+    # Step 2: Post reply in thread
+    url = "https://slack.com/api/chat.postMessage"
+    payload = {
+        "channel": channel_id,
+        "thread_ts": thread_ts,
+        "text": message
+    }
+    try:
+        resp = req_lib.post(url, json=payload, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("ok"):
+            ts = data.get("ts", "")
+            context_summary = f"\n\n--- Thread Context ({len(context_messages)} messages) ---\n" + "\n".join(context_messages[-10:]) if context_messages else ""
+            return f"Success: Replied in thread {thread_ts} (new message ts: {ts}).{context_summary}"
+        else:
+            return f"Failed to reply in thread: {data.get('error')}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_update_message(channel_id: str, message_ts: str, new_text: str) -> str:
+    """Edit/update an existing Slack message that the bot previously sent.
+    
+    Use this to update status messages instead of sending new ones (e.g., 
+    changing "🔴 Đang kiểm tra..." to "🟢 [Đã xử lý]...").
+    
+    Args:
+        channel_id: The Slack Channel ID where the message exists.
+        message_ts: The timestamp (ts) of the message to update.
+        new_text: The new text content to replace the old message.
+    """
+    logger.info(f"slack_update_message tool called: channel={channel_id}, ts={message_ts}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+    
+    url = "https://slack.com/api/chat.update"
+    headers = {
+        "Authorization": f"Bearer {slack_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "channel": channel_id,
+        "ts": message_ts,
+        "text": new_text
+    }
+    try:
+        resp = req_lib.post(url, json=payload, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("ok"):
+            return f"Success: Message {message_ts} updated in channel {channel_id}."
+        else:
+            return f"Failed to update message: {data.get('error')}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_mention_user_or_group(channel_id: str, mention_target: str, message: str, thread_ts: str = "") -> str:
+    """Send a message that @mentions a specific user or user group in Slack.
+    
+    Use this to tag someone directly (e.g., @NOC L3 Engineer) for urgent attention.
+    
+    Args:
+        channel_id: The Slack Channel ID to send the message to.
+        mention_target: The Slack User ID (e.g. U0123456789) or User Group ID (e.g. S0123456789) to mention. Use <!channel> for @channel, <!here> for @here.
+        message: The message content (the mention will be prepended automatically).
+        thread_ts: Optional thread timestamp to reply in a specific thread.
+    """
+    logger.info(f"slack_mention_user_or_group tool called: channel={channel_id}, target={mention_target}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+    
+    # Build mention syntax
+    if mention_target.startswith("<!"):
+        # Already formatted: <!channel>, <!here>
+        mention_str = mention_target
+    elif mention_target.startswith("S"):
+        # User group
+        mention_str = f"<!subteam^{mention_target}>"
+    else:
+        # Individual user
+        mention_str = f"<@{mention_target}>"
+    
+    full_text = f"{mention_str} {message}"
+    
+    url = "https://slack.com/api/chat.postMessage"
+    headers = {
+        "Authorization": f"Bearer {slack_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "channel": channel_id,
+        "text": full_text
+    }
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+    
+    try:
+        resp = req_lib.post(url, json=payload, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("ok"):
+            return f"Success: Mentioned {mention_target} in channel {channel_id}."
+        else:
+            return f"Failed to send mention: {data.get('error')}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_create_channel(channel_name: str, is_private: bool = False) -> str:
+    """Create a new Slack channel (e.g., for incident-specific channels like #inc-kan-105-core-down).
+    
+    Args:
+        channel_name: Name for the new channel (lowercase, no spaces, max 80 chars). 
+                      Example: 'inc-kan-105-core-down'
+        is_private: If True, creates a private channel. Default is public.
+    """
+    logger.info(f"slack_create_channel tool called: name={channel_name}, private={is_private}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+    
+    # Sanitize channel name
+    import re
+    clean_name = re.sub(r'[^a-z0-9\-_]', '-', channel_name.lower().strip())[:80]
+    
+    url = "https://slack.com/api/conversations.create"
+    headers = {
+        "Authorization": f"Bearer {slack_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "name": clean_name,
+        "is_private": is_private
+    }
+    try:
+        resp = req_lib.post(url, json=payload, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("ok"):
+            ch = data["channel"]
+            return f"Success: Channel #{clean_name} created. Channel ID: {ch['id']}"
+        else:
+            error = data.get("error", "")
+            if error == "name_taken":
+                return f"Channel #{clean_name} already exists. Use the existing channel."
+            return f"Failed to create channel: {error}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_invite_to_channel(channel_id: str, user_ids: str) -> str:
+    """Invite one or more users to a Slack channel.
+    
+    Args:
+        channel_id: The Slack Channel ID to invite users to.
+        user_ids: Comma-separated list of Slack User IDs to invite (e.g. 'U0123,U0456,U0789').
+    """
+    logger.info(f"slack_invite_to_channel tool called: channel={channel_id}, users={user_ids}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+    
+    url = "https://slack.com/api/conversations.invite"
+    headers = {
+        "Authorization": f"Bearer {slack_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "channel": channel_id,
+        "users": user_ids.strip()
+    }
+    try:
+        resp = req_lib.post(url, json=payload, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("ok"):
+            return f"Success: Users {user_ids} invited to channel {channel_id}."
+        else:
+            error = data.get("error", "")
+            if error == "already_in_channel":
+                return f"Users are already in channel {channel_id}."
+            return f"Failed to invite users: {error}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_send_block_kit(channel_id: str, blocks_json: str, fallback_text: str = "", thread_ts: str = "") -> str:
+    """Send a rich Block Kit message to a Slack channel.
+    
+    Use this for structured, visually rich messages (status dashboards, incident reports, 
+    interactive cards, etc.).
+    
+    Args:
+        channel_id: The Slack Channel ID to send the message to.
+        blocks_json: A JSON string representing the Slack Block Kit blocks array.
+                     Example: '[{"type":"section","text":{"type":"mrkdwn","text":"*Hello*"}}]'
+        fallback_text: Plain text fallback for notifications (required by Slack API).
+        thread_ts: Optional thread timestamp to send as a threaded reply.
+    """
+    logger.info(f"slack_send_block_kit tool called: channel={channel_id}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+    
+    try:
+        blocks = json.loads(blocks_json)
+    except json.JSONDecodeError as e:
+        return f"Error: Invalid blocks_json — {e}"
+    
+    url = "https://slack.com/api/chat.postMessage"
+    headers = {
+        "Authorization": f"Bearer {slack_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "channel": channel_id,
+        "text": fallback_text or "Block Kit Message",
+        "blocks": blocks
+    }
+    if thread_ts:
+        payload["thread_ts"] = thread_ts
+    
+    try:
+        resp = req_lib.post(url, json=payload, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("ok"):
+            ts = data.get("ts", "")
+            return f"Success: Block Kit message sent to {channel_id} (ts: {ts})."
+        else:
+            return f"Failed to send Block Kit message: {data.get('error')}"
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@mcp.tool()
+def slack_get_channel_history(channel_id: str, limit: int = 10, thread_ts: str = "") -> str:
+    """Fetch recent message history from a Slack channel or thread.
+    
+    MANDATORY: AI Agents MUST call this tool before replying in any channel or thread 
+    to retrieve at least 5-10 previous messages for conversation context.
+    
+    Args:
+        channel_id: The Slack Channel ID to fetch messages from.
+        limit: Number of recent messages to fetch (default: 10, max: 50).
+        thread_ts: Optional thread timestamp. If provided, fetches replies in that thread 
+                   instead of channel-level messages.
+    """
+    logger.info(f"slack_get_channel_history tool called: channel={channel_id}, limit={limit}, thread_ts={thread_ts}")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not slack_token:
+        return "Error: SLACK_BOT_TOKEN is not set."
+    
+    limit = min(max(limit, 1), 50)
+    headers = {"Authorization": f"Bearer {slack_token}"}
+    
+    try:
+        if thread_ts:
+            # Fetch thread replies
+            url = "https://slack.com/api/conversations.replies"
+            params = {
+                "channel": channel_id,
+                "ts": thread_ts,
+                "limit": limit
+            }
+        else:
+            # Fetch channel history
+            url = "https://slack.com/api/conversations.history"
+            params = {
+                "channel": channel_id,
+                "limit": limit
+            }
+        
+        resp = req_lib.get(url, headers=headers, params=params, timeout=10)
+        data = resp.json()
+        
+        if not data.get("ok"):
+            return f"Failed to fetch history: {data.get('error')}"
+        
+        messages = data.get("messages", [])
+        if not messages:
+            return "No messages found in the channel/thread."
+        
+        # Format messages with user info enrichment
+        formatted = []
+        user_cache = {}
+        
+        for msg in messages:
+            user_id = msg.get("user", "")
+            text = msg.get("text", "")
+            ts = msg.get("ts", "")
+            msg_type = msg.get("subtype", "message")
+            
+            # Try to resolve username
+            display_name = user_id
+            if user_id and user_id not in user_cache:
+                try:
+                    user_url = "https://slack.com/api/users.info"
+                    user_resp = req_lib.get(user_url, headers=headers, params={"user": user_id}, timeout=5)
+                    user_data = user_resp.json()
+                    if user_data.get("ok"):
+                        profile = user_data["user"].get("profile", {})
+                        display_name = (
+                            profile.get("display_name") or 
+                            profile.get("real_name") or 
+                            user_data["user"].get("real_name") or 
+                            user_data["user"].get("name") or 
+                            user_id
+                        )
+                        user_cache[user_id] = display_name
+                except Exception:
+                    user_cache[user_id] = user_id
+            elif user_id in user_cache:
+                display_name = user_cache[user_id]
+            
+            # Parse timestamp to human-readable
+            try:
+                from datetime import datetime as dt
+                msg_time = dt.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                msg_time = ts
+            
+            formatted.append(f"[{msg_time}] {display_name}: {text}")
+        
+        source = f"thread {thread_ts}" if thread_ts else f"channel {channel_id}"
+        header = f"--- Conversation History ({len(formatted)} messages from {source}) ---"
+        return header + "\n" + "\n".join(formatted)
+        
+    except Exception as e:
+        return f"Error: {e}"
 
 
 # ===================================================================

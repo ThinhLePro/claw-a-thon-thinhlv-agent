@@ -24,12 +24,6 @@ from agent_tools import (
     write_file,
     list_workspace_files,
     http_request,
-    slack_view_profile,
-    slack_react_message,
-    slack_view_status,
-    slack_send_file,
-    slack_read_file,
-    read_url
 )
 load_dotenv()
 
@@ -80,7 +74,7 @@ class StateManager:
         return redis_client.get(f"agent:url:{agent_name}")
 
 
-# --- Discover MCP Tools ---
+# --- Discover MCP Tools (includes all Slack/Jira/Network tools via ACL) ---
 logger.info(f"Discovering MCP tools from {MCP_SERVER_URL}...")
 try:
     mcp_tools = discover_mcp_tools(MCP_SERVER_URL, agent_name="senior-network-engineer-agent", redis_client=redis_client)
@@ -90,18 +84,14 @@ except Exception as e:
     mcp_tools = []
 
 # --- Create Agent ---
+# Local tools: workspace ops + diagnostic snapshots
+# MCP tools: all Slack, Jira, Network device, and notification tools (centralized)
 tools = [
     capture_state_snapshot,
     read_file,
     write_file,
     list_workspace_files,
     http_request,
-    slack_view_profile,
-    slack_react_message,
-    slack_view_status,
-    slack_send_file,
-    slack_read_file,
-    read_url,
     *mcp_tools
 ]
 

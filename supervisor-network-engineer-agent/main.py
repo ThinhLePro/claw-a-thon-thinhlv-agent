@@ -122,6 +122,16 @@ def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str 
             "loop_count": 0,
             "messages": []
         }
+        # Load pre-seeded Slack context if available (set by slack_bot.py before state existed)
+        try:
+            slack_ctx_data = redis_client.get(f"slack_ctx:{session_id}")
+            if slack_ctx_data:
+                slack_ctx = json.loads(slack_ctx_data)
+                state["slack_channel_id"] = slack_ctx.get("channel_id", "")
+                state["slack_thread_ts"] = slack_ctx.get("thread_ts", "")
+                redis_client.delete(f"slack_ctx:{session_id}")  # Clean up
+        except Exception:
+            pass
     elif user_id:
         state["user_id"] = user_id
     
@@ -145,10 +155,10 @@ def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str 
                 url = customer_url.rstrip("/") + "/invocations"
                 response = requests.post(url, json={"session_id": session_id}, timeout=10)
                 response.raise_for_status()
-                return "⚠️ Quá thời gian tự động xử lý. Đã tự động chuyển ticket cho kỹ sư L3 và thông báo khách hàng."
+                return "⚠️ Auto-processing time limit exceeded. Ticket has been escalated to L3 Human Engineers and the customer has been notified."
             except Exception as ex:
                 logger.error(f"Failed to call customer advisory: {ex}")
-        return "⚠️ Lỗi kết nối khi gửi yêu cầu hỗ trợ khẩn cấp. Vui lòng liên hệ trực tiếp NOC."
+        return "⚠️ Connection error while sending urgent support request. Please contact the NOC team directly."
 
     # 2. Invoke Router LLM
     try:
@@ -217,15 +227,61 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
             except Exception as tg_ex:
                 logger.error(f"Failed to auto-send Telegram logs: {tg_ex}")
 
+            # --- Auto-notify Customer on Resolution (Closure Notification) ---
+            # Safety net: only sends if Customer Advisory Agent didn't already notify
+            try:
+                # Reload state to check if closure_notified was set by send_notification MCP tool
+                state = StateManager.get_state(session_id) or state
+                
+                slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+                customer_channel = os.environ.get("SLACK_CHANNEL_CUSTOMER", "#all-customer-001")
+                if slack_token and not state.get("closure_notified"):
+                    symptoms = state.get("symptoms", "")
+                    rca = state.get("rca_summary", "")
+                    jira = state.get("jira_issue_key", "")
+                    
+                    closure_msg = "✅ *[Incident Resolved]*\n\n"
+                    if jira:
+                        closure_msg += f"📋 *Ticket:* `{jira}`\n"
+                    if symptoms:
+                        closure_msg += f"📝 *Initial Symptoms:* {symptoms[:300]}\n"
+                    if rca:
+                        closure_msg += f"🔍 *Result:* {rca[:500]}\n"
+                    elif direct_response:
+                        closure_msg += f"🔍 *Result:* {direct_response[:500]}\n"
+                    closure_msg += f"\n💬 If you have any further questions, please reply here or contact the NOC team directly."
+                    
+                    import requests as req_lib_local
+                    url = "https://slack.com/api/chat.postMessage"
+                    headers = {
+                        "Authorization": f"Bearer {slack_token}",
+                        "Content-Type": "application/json; charset=utf-8"
+                    }
+                    payload = {
+                        "channel": customer_channel,
+                        "text": closure_msg
+                    }
+                    resp = req_lib_local.post(url, json=payload, headers=headers, timeout=10)
+                    if resp.status_code == 200 and resp.json().get("ok"):
+                        logger.info(f"Closure notification sent to customer channel {customer_channel}")
+                        state["closure_notified"] = True
+                        StateManager.save_state(session_id, state)
+                    else:
+                        logger.warning(f"Failed to send closure notification: {resp.json().get('error', resp.text[:200])}")
+                elif state.get("closure_notified"):
+                    logger.info(f"Skipping hardcoded closure — already notified by Customer Advisory Agent via MCP.")
+            except Exception as closure_ex:
+                logger.error(f"Failed to send customer closure notification: {closure_ex}")
+
             if direct_response:
                 return direct_response
-            return state["rca_summary"] or "Quy trình chẩn đoán hoàn tất."
+            return state["rca_summary"] or "Diagnostic workflow completed."
             
         # Trigger the worker agent dynamically
         worker_url = StateManager.get_agent_url(next_agent)
         if not worker_url:
             logger.error(f"Endpoint for agent {next_agent} not found in Redis.")
-            return f"Lỗi hệ thống: Không tìm thấy địa chỉ dịch vụ của {next_agent}."
+            return f"System error: Service endpoint for {next_agent} not found."
             
         # Call worker asynchronously
         def _trigger():
@@ -243,11 +299,11 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
         ai_response = res_json.get("response", "").strip()
         if ai_response:
             return ai_response
-        return f"Đang chuyển tiếp xử lý đến {next_agent}..."
+        return f"Routing to {next_agent} for processing..."
         
     except Exception as e:
         logger.error(f"Error in Supervisor loop: {e}", exc_info=True)
-        return f"Có lỗi xảy ra trong quá trình điều phối xử lý: {e}"
+        return f"An error occurred during workflow orchestration: {e}"
 
 
 def process_message(message: str, user_id: str, session_id: str) -> str:
@@ -255,7 +311,7 @@ def process_message(message: str, user_id: str, session_id: str) -> str:
     cmd = message.strip().lower().split()[0] if message.strip() else ""
     if cmd in ["/new", "/newchat", "/reset"]:
         redis_client.delete(f"state:{session_id}")
-        return "🧹 *Đã xóa lịch sử phiên chat cũ.* Phiên chat mới của bạn đã được khởi tạo! Hãy hỏi tôi bất kỳ câu hỏi nào. 🚀"
+        return "🧹 *Previous session history cleared.* A new chat session has been initialized! Feel free to ask me anything. 🚀"
     return run_supervisor_loop(session_id, message, user_id)
 
 
@@ -274,7 +330,7 @@ def handler(payload: dict, context: RequestContext) -> dict:
             device = labels.get("device") or labels.get("instance") or "unknown"
             alert_name = labels.get("alertname") or "Network Alert"
             summary = annotations.get("summary") or annotations.get("description") or "No details"
-            alert_details.append(f"Thiết bị: {device} | Cảnh báo: {alert_name} | Chi tiết: {summary}")
+            alert_details.append(f"Device: {device} | Alert: {alert_name} | Details: {summary}")
         
         alert_summary = "; ".join(alert_details)
         
@@ -309,8 +365,40 @@ def handler(payload: dict, context: RequestContext) -> dict:
         sender = payload.get("sender", "unknown")
         logger.info(f"Received callback from worker {sender} for session {session_id_cb}")
         
-        # Resume the supervisor loop asynchronously to prevent worker read timeouts
-        threading.Thread(target=run_supervisor_loop, args=(session_id_cb,), daemon=True).start()
+        # Resume the supervisor loop AND post result back to Slack thread
+        def _callback_and_reply():
+            result = run_supervisor_loop(session_id_cb)
+            # Post the final result back to the originating Slack thread
+            try:
+                cb_state = StateManager.get_state(session_id_cb)
+                if cb_state and cb_state.get("current_assignee") == "FINISH":
+                    slack_channel = cb_state.get("slack_channel_id")
+                    slack_thread = cb_state.get("slack_thread_ts")
+                    if slack_channel and slack_thread and result:
+                        slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
+                        if slack_token:
+                            import requests as req_cb
+                            resp = req_cb.post(
+                                "https://slack.com/api/chat.postMessage",
+                                json={
+                                    "channel": slack_channel,
+                                    "thread_ts": slack_thread,
+                                    "text": result
+                                },
+                                headers={
+                                    "Authorization": f"Bearer {slack_token}",
+                                    "Content-Type": "application/json; charset=utf-8"
+                                },
+                                timeout=10
+                            )
+                            if resp.status_code == 200 and resp.json().get("ok"):
+                                logger.info(f"Posted callback result to Slack thread {slack_thread}")
+                            else:
+                                logger.warning(f"Failed to post callback to Slack: {resp.json().get('error', resp.text[:200])}")
+            except Exception as slack_ex:
+                logger.error(f"Failed to post callback result to Slack thread: {slack_ex}")
+        
+        threading.Thread(target=_callback_and_reply, daemon=True).start()
         return {
             "status": "success",
             "message": "Callback triggered",

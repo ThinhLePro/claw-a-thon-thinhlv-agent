@@ -13,8 +13,18 @@ SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
 
 # Initialize app only if tokens are present
+BOT_USER_ID = ""
 if SLACK_BOT_TOKEN and SLACK_APP_TOKEN:
     app = App(token=SLACK_BOT_TOKEN)
+    # Auto-detect the bot's own user ID to prevent duplicate event processing
+    try:
+        auth_result = app.client.auth_test()
+        if auth_result.get("ok"):
+            BOT_USER_ID = auth_result.get("user_id", "")
+            logger.info(f"Slack bot user ID: {BOT_USER_ID}")
+    except Exception as e:
+        logger.warning(f"Failed to auto-detect bot user ID: {e}")
+    BOT_USER_ID = BOT_USER_ID or os.environ.get("SLACK_BOT_USER_ID", "")
 else:
     app = None
 
@@ -101,6 +111,11 @@ if app:
     def handle_message(event, say):
         if "subtype" in event:
             return
+        # Skip if this message is also an app_mention (handled by handle_app_mention)
+        # to prevent duplicate processing
+        text = event.get("text", "")
+        if BOT_USER_ID and f"<@{BOT_USER_ID}>" in text:
+            return
         # Process message
         _handle_text_event(event, say)
 
@@ -111,18 +126,92 @@ if app:
         user = event.get("user")
         text = event.get("text", "")
         thread_ts = event.get("thread_ts", event.get("ts"))
+        channel_id = event.get("channel", "")
         
         user_id = f"slack-{user}"
         session_id = f"slack_thread:{thread_ts}"
         
         logger.info(f"Slack msg from {user}: {text[:80]}...")
         
+        # --- Save Slack context into Redis state for async callback replies ---
         try:
-            response = _process_message_fn(text, user_id, session_id)
+            import redis as redis_lib
+            redis_host = os.environ.get("REDIS_HOST", "49.213.77.222")
+            redis_port = int(os.environ.get("REDIS_PORT", "6379"))
+            r = redis_lib.Redis(host=redis_host, port=redis_port, decode_responses=True)
+            state_key = f"state:{session_id}"
+            state_data = r.get(state_key)
+            if state_data:
+                state = json.loads(state_data)
+                state["slack_channel_id"] = channel_id
+                state["slack_thread_ts"] = thread_ts
+                r.set(state_key, json.dumps(state))
+            else:
+                # Will be created by run_supervisor_loop, pre-seed the slack context
+                r.set(f"slack_ctx:{session_id}", json.dumps({
+                    "channel_id": channel_id,
+                    "thread_ts": thread_ts
+                }))
+        except Exception as e:
+            logger.warning(f"Failed to save Slack context to Redis: {e}")
+        
+        # --- Context Enrichment: Fetch last 10 messages from thread/channel ---
+        context_text = ""
+        try:
+            if thread_ts:
+                # Fetch thread replies for context
+                result = app.client.conversations_replies(
+                    channel=channel_id,
+                    ts=thread_ts,
+                    limit=10
+                )
+            else:
+                # Fetch channel history for context
+                result = app.client.conversations_history(
+                    channel=channel_id,
+                    limit=10
+                )
+            
+            messages = result.get("messages", [])
+            if messages:
+                context_lines = []
+                for msg in messages[-10:]:
+                    msg_user = msg.get("user", "bot")
+                    msg_text = msg.get("text", "")
+                    msg_ts = msg.get("ts", "")
+                    # Resolve user display name
+                    try:
+                        user_info = app.client.users_info(user=msg_user)
+                        if user_info.get("ok"):
+                            profile = user_info["user"].get("profile", {})
+                            display = profile.get("display_name") or profile.get("real_name") or msg_user
+                        else:
+                            display = msg_user
+                    except Exception:
+                        display = msg_user
+                    context_lines.append(f"[{display}]: {msg_text}")
+                
+                if context_lines:
+                    context_text = (
+                        "\n\n--- Conversation Context (last {} messages) ---\n".format(len(context_lines))
+                        + "\n".join(context_lines)
+                        + "\n--- End Context ---\n"
+                    )
+                    logger.info(f"Enriched message with {len(context_lines)} context messages for thread {thread_ts}")
+        except Exception as e:
+            logger.warning(f"Failed to fetch conversation context: {e}")
+        
+        # Combine context with user message
+        enriched_message = text
+        if context_text:
+            enriched_message = f"{text}{context_text}"
+        
+        try:
+            response = _process_message_fn(enriched_message, user_id, session_id)
             say(text=response, thread_ts=thread_ts)
         except Exception as e:
             logger.error(f"Error processing Slack message: {e}", exc_info=True)
-            say(text="⚠️ Có lỗi xảy ra khi xử lý tin nhắn. Vui lòng thử lại sau.", thread_ts=thread_ts)
+            say(text="⚠️ An error occurred while processing your message. Please try again later.", thread_ts=thread_ts)
 
     @app.action("approve_change")
     def handle_approve(ack, body, logger):

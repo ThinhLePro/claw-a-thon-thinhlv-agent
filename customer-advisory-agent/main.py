@@ -23,12 +23,6 @@ from agent_tools import (
     write_file,
     list_workspace_files,
     http_request,
-    slack_view_profile,
-    slack_react_message,
-    slack_view_status,
-    slack_send_file,
-    slack_read_file,
-    read_url
 )
 load_dotenv()
 
@@ -79,7 +73,7 @@ class StateManager:
         return redis_client.get(f"agent:url:{agent_name}")
 
 
-# --- Discover MCP Tools ---
+# --- Discover MCP Tools (includes all Slack/Jira/notification tools via ACL) ---
 logger.info(f"Discovering MCP tools from {MCP_SERVER_URL}...")
 try:
     mcp_tools = discover_mcp_tools(MCP_SERVER_URL, agent_name="customer-advisory-agent", redis_client=redis_client)
@@ -89,17 +83,13 @@ except Exception as e:
     mcp_tools = []
 
 # --- Create Agent ---
+# Local tools: workspace ops only
+# MCP tools: all Slack, Jira, and notification tools (centralized)
 tools = [
     read_file,
     write_file,
     list_workspace_files,
     http_request,
-    slack_view_profile,
-    slack_react_message,
-    slack_view_status,
-    slack_send_file,
-    slack_read_file,
-    read_url,
     *mcp_tools
 ]
 
