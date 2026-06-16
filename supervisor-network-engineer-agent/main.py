@@ -18,6 +18,7 @@ from greennode_agentbase import (
 from system_prompt import SYSTEM_PROMPT
 from slack_bot import start_slack_bot, send_slack_message, SLACK_CHANNEL_ALERTS
 from email_gateway import start_email_gateway
+from telegram_bot import start_telegram_bot
 
 load_dotenv()
 
@@ -68,6 +69,27 @@ class StateManager:
     @staticmethod
     def set_agent_url(agent_name: str, url: str):
         redis_client.set(f"agent:url:{agent_name}", url)
+
+
+def send_telegram_message(message: str):
+    """Send a message to Telegram using BOT_TOKEN and CHAT_ID from env."""
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return
+    try:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        resp = requests.post(url, json={
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "Markdown"
+        }, timeout=10)
+        if resp.status_code == 200:
+            logger.info("Successfully sent session log to Telegram.")
+        else:
+            logger.error(f"Failed to send Telegram message: HTTP {resp.status_code} — {resp.text}")
+    except Exception as e:
+        logger.error(f"Error sending Telegram message: {e}")
 
 
 def parse_json_garbage(text: str) -> dict:
@@ -178,6 +200,26 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
         if next_agent == "FINISH":
             # Return direct response from JSON if available, fallback to rca_summary or default
             direct_response = res_json.get("response", "").strip()
+            
+            # Auto-send completed session logs to Telegram
+            try:
+                symptoms = state.get("symptoms", "No details")
+                jira = state.get("jira_issue_key", "None")
+                logs = state.get("diagnostic_logs", [])
+                
+                log_text = f"📋 *Session Completed: `{session_id}`*\n"
+                log_text += f"━━━━━━━━━━━━━━━━━━━\n"
+                log_text += f"▪️ *Symptoms*: {symptoms}\n"
+                log_text += f"▪️ *Jira Ticket*: `{jira}`\n"
+                log_text += f"━━━━━━━━━━━━━━━━━━━\n\n"
+                log_text += "*Diagnostic History:*\n"
+                for idx, log_entry in enumerate(logs, 1):
+                    log_text += f"{idx}. {log_entry}\n"
+                
+                send_telegram_message(log_text)
+            except Exception as tg_ex:
+                logger.error(f"Failed to auto-send Telegram logs: {tg_ex}")
+
             if direct_response:
                 return direct_response
             return state["rca_summary"] or "Quy trình chẩn đoán hoàn tất."
@@ -311,6 +353,17 @@ email_thread = threading.Thread(
 )
 email_thread.start()
 logger.info("Email Gateway thread launched")
+
+# --- Telegram Bot Launch ---
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+if TELEGRAM_BOT_TOKEN:
+    telegram_thread = threading.Thread(
+        target=start_telegram_bot,
+        args=(process_message, TELEGRAM_BOT_TOKEN),
+        daemon=True,
+    )
+    telegram_thread.start()
+    logger.info("Telegram bot thread launched")
 
 if __name__ == "__main__":
     app.run(port=8080, host="0.0.0.0")

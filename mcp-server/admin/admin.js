@@ -33,6 +33,7 @@ let state = {
     operations: { data: [], page: 1, total: 0 },
     configurations: { data: [], page: 1, total: 0 },
     devices: { data: [] },
+    tools: { data: [] },
     logs: { sessions: [], activeSessionId: null }
 };
 
@@ -45,6 +46,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadOperations();
     loadConfigurations();
     loadDevices();
+    loadTools();
 });
 
 // ═══ State Persistence ═══
@@ -71,6 +73,7 @@ function setupNavigation() {
         'operations': 'Operation Commands',
         'configurations': 'Configuration Statements',
         'devices': 'Device Inventory',
+        'tools': 'Registered MCP Tools',
         'logs': 'AI Incident Session Logs',
         'parser': 'NOC Inbound Request Parser'
     };
@@ -93,6 +96,8 @@ function setupNavigation() {
             // Trigger log loading
             if (tab === 'logs') {
                 loadSessions();
+            } else if (tab === 'tools') {
+                loadTools();
             }
         });
     });
@@ -120,6 +125,9 @@ function setupSearch() {
             } else if (activeTab === 'configurations') {
                 document.getElementById('cfgSearch').value = query;
                 loadConfigurations();
+            } else if (activeTab === 'tools') {
+                document.getElementById('toolsSearch').value = query;
+                filterTools();
             }
         }, 300);
     });
@@ -1359,4 +1367,78 @@ async function triggerSupervisor() {
         btn.disabled = false;
         btn.textContent = 'Gửi đến NOC Supervisor / Tạo Ticket';
     }
+}
+
+// ═══ MCP Tools ═══
+async function loadTools() {
+    try {
+        const response = await fetch(`${API_BASE}/admin/api/tools`);
+        if (response.ok) {
+            state.tools = { data: await response.json() };
+        }
+    } catch (e) {
+        console.warn('Could not load tools from API:', e);
+    }
+    renderToolsTable();
+}
+
+function renderToolsTable() {
+    const tbody = document.getElementById('toolsTableBody');
+    const data = state.tools ? state.tools.data : [];
+    
+    if (data.length === 0) {
+        tbody.innerHTML = `
+            <tr><td colspan="3" style="text-align:center; padding:40px; color:var(--text-secondary);">
+                No registered MCP tools found. Connect to the MCP API.
+            </td></tr>
+        `;
+        return;
+    }
+
+    tbody.innerHTML = data.map(t => {
+        // Format properties from inputSchema
+        let argsHtml = '';
+        if (t.inputSchema && t.inputSchema.properties) {
+            const props = t.inputSchema.properties;
+            const required = t.inputSchema.required || [];
+            argsHtml = Object.keys(props).map(propName => {
+                const isRequired = required.includes(propName);
+                const info = props[propName];
+                return `<div class="tool-arg">
+                    <span class="arg-name">${propName}${isRequired ? ' <span style="color:var(--accent-danger);">*</span>' : ''}</span>
+                    <span class="arg-type">(${info.type || 'any'})</span>
+                    ${info.description ? ` - <span class="arg-desc">${info.description}</span>` : ''}
+                </div>`;
+            }).join('');
+        } else {
+            argsHtml = `<span style="color:var(--text-secondary); font-style:italic;">No arguments</span>`;
+        }
+
+        return `
+            <tr>
+                <td class="cmd-name" style="font-family:'JetBrains Mono',monospace; font-size:13px; color:var(--text-accent); vertical-align: top;">${escapeHtml(t.name)}</td>
+                <td style="vertical-align: top; line-height: 1.5;">${escapeHtml(t.description || 'No description')}</td>
+                <td>
+                    <div style="font-size: 12px; display: flex; flex-direction: column; gap: 4px;">
+                        ${argsHtml}
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function filterTools() {
+    const search = document.getElementById('toolsSearch').value.toLowerCase();
+    const rows = document.querySelectorAll('#toolsTableBody tr');
+    
+    rows.forEach(row => {
+        const name = row.querySelector('.cmd-name').textContent.toLowerCase();
+        const desc = row.cells[1].textContent.toLowerCase();
+        if (name.includes(search) || desc.includes(search)) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
 }

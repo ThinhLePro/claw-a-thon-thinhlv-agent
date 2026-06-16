@@ -1165,3 +1165,30 @@ body {
     box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
 }
 
+/* MCP Tools Tab Custom Styles */
+.tool-arg {
+    padding: 6px 10px;
+    background: var(--bg-input);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    margin-bottom: 4px;
+    line-height: 1.4;
+}
+
+.arg-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.arg-type {
+    color: var(--text-accent);
+    font-size: 11px;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.arg-desc {
+    color: var(--text-secondary);
+}
+
+

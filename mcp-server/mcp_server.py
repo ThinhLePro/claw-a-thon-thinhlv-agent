@@ -2701,6 +2701,23 @@ if __name__ == "__main__":
             logger.error(f"Error triggering NOC Supervisor: {e}")
             return JSONResponse({"error": str(e)}, status_code=500)
 
+    async def admin_get_tools(request: Request) -> JSONResponse:
+        """List all tools registered in the FastMCP server."""
+        try:
+            tools = await mcp.list_tools()
+            tool_list = []
+            for t in tools:
+                tool_list.append({
+                    "name": t.name,
+                    "description": t.description,
+                    "inputSchema": t.inputSchema
+                })
+            tool_list.sort(key=lambda x: x["name"])
+            return JSONResponse(tool_list)
+        except Exception as e:
+            logger.error(f"Failed to list FastMCP tools: {e}", exc_info=True)
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     # Admin static files
     from starlette.staticfiles import StaticFiles
 
@@ -2717,6 +2734,7 @@ if __name__ == "__main__":
         Route("/admin/api/sessions/{session_id}", admin_get_session, methods=["GET"]),
         Route("/admin/api/sessions/{session_id}/clear", admin_clear_session, methods=["POST"]),
         Route("/admin/api/parser/trigger", admin_trigger_parser, methods=["POST"]),
+        Route("/admin/api/tools", admin_get_tools, methods=["GET"]),
     ]
 
 

@@ -94,11 +94,12 @@ claw-a-thon-thinhlv-agent/
 │       └── network_assets.db              # Network Assets SQLite DB (gitignored)
 │
 ├── supervisor-network-engineer-agent/      # 👑 Entrypoint & NOC Coordinator Agent
-│   ├── main.py                            # Runs web service, Slack bot, Email gateway, and routing loops
+│   ├── main.py                            # Runs web service, Slack bot, Email gateway, Telegram bot, and routing loops
 │   ├── system_prompt.py                   # Intent routing guidelines
 │   ├── slack_bot.py                       # Slack Socket Mode integration & channel routing
 │   ├── email_gateway.py                   # IMAP background thread email client gateway
-│   ├── markdown_converter.py              # MD to HTML/Slack text converter
+│   ├── telegram_bot.py                    # Telegram bot for querying active sessions and logs
+│   ├── markdown_converter.py              # MD to HTML/Slack text/Telegram HTML converter
 │   └── Dockerfile
 │
 ├── analytics-network-engineer-agent/      # 🔍 Alert Triager & Jira Ticket Creator
@@ -279,5 +280,16 @@ To visualize and manually test the Natural Language parsing abilities of the NOC
     *   Pre-loaded mock scenarios (peering links down, interface config dump requests, routine maintenance scheduling).
     *   Simulates the intent classifier, target device extractor, priority levels assignment, and displays the designated worker agent.
     *   Automatically drafts title and body templates for direct Jira ticket creations.
+    *   **MCP Tools Browser**: A dedicated tab listing all registered tools, their parameters, and expected input schemas in real time.
+
+---
+
+## Telegram Bot Integration
+
+A background Telegram bot (`telegram_bot.py`) can be enabled on the Supervisor Agent using `TELEGRAM_BOT_TOKEN`:
+*   **Active Sessions Directory**: Send `/sessions` command to retrieve a summary of the 15 most recent diagnostic sessions, their assignees, and ticket descriptions.
+*   **AI Session Logs Retrieval**: Send `/logs <session_id>` to fetch and output the entire execution and diagnostic logs of a specific AI incident.
+*   **Auto-notifications**: When a session finishes (`FINISH`), the bot automatically pushes a structured incident completion summary to the chat ID configured in `TELEGRAM_CHAT_ID`.
+
 
 
