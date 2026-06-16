@@ -18,9 +18,19 @@ from greennode_agentbase import (
 
 from system_prompt import ALERT_ANALYTICS_PROMPT
 from mcp_client import discover_mcp_tools
-from agent_tools import check_flapping_history, read_file, write_file, list_workspace_files, http_request
-from jira_tools import create_jira_task, update_task_status, add_task_comment, query_previous_incidents
-
+from agent_tools import (
+    check_flapping_history,
+    read_file,
+    write_file,
+    list_workspace_files,
+    http_request,
+    slack_view_profile,
+    slack_react_message,
+    slack_view_status,
+    slack_send_file,
+    slack_read_file,
+    read_url
+)
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
@@ -73,7 +83,7 @@ class StateManager:
 # --- Discover MCP Tools ---
 logger.info(f"Discovering MCP tools from {MCP_SERVER_URL}...")
 try:
-    mcp_tools = discover_mcp_tools(MCP_SERVER_URL)
+    mcp_tools = discover_mcp_tools(MCP_SERVER_URL, agent_name="analytics-network-engineer-agent", redis_client=redis_client)
     logger.info(f"Successfully registered {len(mcp_tools)} MCP tools")
 except Exception as e:
     logger.error(f"Failed to discover MCP tools: {e}")
@@ -82,14 +92,16 @@ except Exception as e:
 # --- Create Agent ---
 tools = [
     check_flapping_history,
-    create_jira_task,
-    update_task_status,
-    add_task_comment,
-    query_previous_incidents,
     read_file,
     write_file,
     list_workspace_files,
     http_request,
+    slack_view_profile,
+    slack_react_message,
+    slack_view_status,
+    slack_send_file,
+    slack_read_file,
+    read_url,
     *mcp_tools
 ]
 
@@ -113,6 +125,7 @@ def run_analytics_work(session_id: str):
 
     # Prepare inputs for the agent
     agent_input = f"""Incident Symptoms: {state['symptoms']}
+Reporting User: {state.get('user_id', 'Unknown')}
 JIRA Ticket: {state.get('jira_issue_key', 'None')}
 Affected Entities: {state.get('affected_entities', [])}"""
 

@@ -10,7 +10,7 @@ The system transitions from a single agent design to a team of 4 specialized AI 
 
 ```
                  ┌────────────────────────────────────────────────────────┐
-                 │                Telegram Bot / Prometheus Alerts        │
+                 │        Slack App (Socket Mode) / Prometheus Alerts     │
                  └───────────────────────────┬────────────────────────────┘
                                              │ User / Webhook Event
                                              ▼
@@ -49,7 +49,7 @@ The system transitions from a single agent design to a team of 4 specialized AI 
  │                                           │ NETCONF (SSH 830/22)                       │
  │                                           ▼                                            │
  │     ┌──────────────────────────────────────────────────────────────────────────┐       │
- │     │                      Lab Network Devices (QFX, EX, SRX)                  │       │
+ │     │                      Lab Network Devices (MX, QFX, EX, SRX)              │       │
  │     └──────────────────────────────────────────────────────────────────────────┘       │
  └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -58,7 +58,7 @@ The system transitions from a single agent design to a team of 4 specialized AI 
 
 1.  **NOC Supervisor Agent** (`supervisor-network-engineer-agent`):
     *   **Role**: Router / Orchestrator.
-    *   **Responsibility**: Receives incoming user commands (via Telegram) or Prometheus Alertmanager webhooks. Uses a router LLM to analyze the incident state and delegate the task to the correct worker agent, or replies directly for general design/audit queries. It enforces a safety loop limit of 5 turns before auto-escalating to Level 3.
+    *   **Responsibility**: Receives incoming user commands (via Slack `#all-customer-001`) or Prometheus Alertmanager webhooks (pushed to `#noc-l3-alerts`). Uses a router LLM to analyze the incident state and delegate the task to the correct worker agent while dynamically generating contextual transition messages to inform the user. It enforces a safety loop limit of 5 turns before auto-escalating to Level 3.
 2.  **Triage/Analytics Agent** (`analytics-network-engineer-agent`):
     *   **Role**: Incident Triager.
     *   **Responsibility**: Validates alerts, reviews hardware/software states, checks for link flapping, and creates the mandatory Jira ticket on the KAN board.
@@ -66,8 +66,8 @@ The system transitions from a single agent design to a team of 4 specialized AI 
     *   **Role**: Deep Diagnostician & Executor.
     *   **Responsibility**: Connects to datacenter switches/routers using NETCONF MCP tools, runs complex troubleshooting workflows, designs configuration changes, and updates Jira with detailed technical notes.
 4.  **Customer Advisory Agent** (`customer-advisory-agent`):
-    *   **Role**: L3 Engineer / Customer Communicator.
-    *   **Responsibility**: Reviews the resolved incident logs, drafts customer-facing reports (Root Cause Analysis - RCA), prepares self-help guidelines (SOPs), sends out notifications via Telegram, and transitions the Jira ticket to **DONE**.
+    *   **Role**: L3 Engineer Escalation & Customer Communicator.
+    *   **Responsibility**: Reviews the resolved incident logs, drafts customer-facing reports (Root Cause Analysis - RCA), and prepares self-help guidelines. Crucially, it manages two distinct notification channels: replying contextually to the **Customer** session, and escalating unresolved or limit-exceeded incidents to the internal **L3 Engineer** group via Slack. Finally, it transitions the Jira ticket to **DONE**.
 
 ### State & Orchestration Flow
 
@@ -94,10 +94,11 @@ claw-a-thon-thinhlv-agent/
 │       └── network_assets.db              # Network Assets SQLite DB (gitignored)
 │
 ├── supervisor-network-engineer-agent/      # 👑 Entrypoint & NOC Coordinator Agent
-│   ├── main.py                            # Runs web service, Telegram bot, and routing loops
+│   ├── main.py                            # Runs web service, Slack bot, Email gateway, and routing loops
 │   ├── system_prompt.py                   # Intent routing guidelines
-│   ├── telegram_bot.py                    # Telegram long-polling integration
-│   ├── markdown_converter.py              # MD to Telegram HTML converter
+│   ├── slack_bot.py                       # Slack Socket Mode integration & channel routing
+│   ├── email_gateway.py                   # IMAP background thread email client gateway
+│   ├── markdown_converter.py              # MD to HTML/Slack text converter
 │   └── Dockerfile
 │
 ├── analytics-network-engineer-agent/      # 🔍 Alert Triager & Jira Ticket Creator
@@ -219,7 +220,7 @@ The workers use standard tools to interact with Jira REST API v3:
       ├─► (Configuration Change Needed) ──► (Show Config Diff) ──► [WAITING FOR APPROVAL]
       │                                                                     │
       │                                                                     ▼
-      │                                                           (User Approves / Webhook)
+      │                                                 (User Clicks Approve in Slack #noc-cab-approvals)
       │                                                                     │
       ├─────────────────────────────────────────────────────────────────────┘
       │
@@ -229,7 +230,54 @@ The workers use standard tools to interact with Jira REST API v3:
 
 ---
 
+## Slack Integration & Channel Architecture
+
+To enforce Segregation of Duties and maintain strict confidentiality between client communication and L3 operational triage, the workspace is partitioned into 3 channels:
+
+1. **`#all-customer-001` (ID: `C0BAVG5CLNN`) [Public]:** For customer updates and public bot interactions.
+2. **`#noc-l3-alerts` (ID: `C0BAPPKR8RZ`) [Private]:** For Prometheus/Loki core alarms and P1 critical incident escalations.
+3. **`#noc-cab-approvals` (ID: `C0BBQDECATS`) [Private]:** For L3 Change Advisory Board configuration approval workflows using Block Kit buttons.
+
+---
+
+## Slack & Web-Reading Tools
+
+The worker agents are equipped with Slack utility and web-reading tools to leverage their newly granted workspace scopes:
+
+*   `slack_view_profile(user_id)`: Retrieve detailed profile info of a Slack member (name, email, timezone, status).
+*   `slack_react_message(channel_id, message_ts, emoji_name)`: React with an emoji (e.g. `thumbsup`, `white_check_mark`) to Slack messages.
+*   `slack_view_status(user_id)`: Check user presence status (active/away).
+*   `slack_send_file(channel_id, file_path, title, initial_comment)`: Upload diagnostic configurations, logs, or snapshots directly from the agent workspace to a Slack channel.
+*   `slack_read_file(file_id)`: Read textual logs or configurations shared by L3 engineers.
+*   `read_url(url)`: Download and strip HTML files/documentation into clean plain text for AI reading.
+
+---
+
 ## Security Notes
 
 *   **Secrets & Credentials**: Always keep your environment-specific passwords, Slack tokens, and Jira API Tokens in `.env` files. Ensure they are gitignored and never hardcoded in source files.
 *   **Webhook Signing**: Simulate JIRA approvals locally using the HMAC SHA256 signatures helper script [approve_ticket.py](file:///home/thinhle/claw-a-thon-thinhlv-agent/shared/approve_ticket.py).
+
+---
+
+## Email Inbound Gateway
+
+The Supervisor Agent includes an **Email Gateway** (`email_gateway.py`) that runs in a background thread:
+*   **IMAP Polling**: Polls the inbox of `claw.a.thon.noc.agent.greennode01@gmail.com` every 10 seconds for unread emails.
+*   **De-duplication & Loop Prevention**: Uses Redis cache to deduplicate emails using `Message-ID` with a 30-day TTL, and filters out auto-replies or bulk mail (precedence header).
+*   **Body Parsing**: Extracts plain/HTML body elements and cleans signature/reply history via `email_reply_parser` and `BeautifulSoup`.
+*   **Rate Limiting**: Restricts users to a maximum of 5 requests per minute using Redis counters.
+*   **SMTP Replies**: Automatically drafts and emails responses back to the sender under the referenced email thread.
+
+---
+
+## Interactive NOC Inbound Request Parser Dashboard
+
+To visualize and manually test the Natural Language parsing abilities of the NOC Supervisor, an interactive web interface is hosted on the MCP Server container:
+*   **URL**: `http://localhost:8980/admin/`
+*   **Features**:
+    *   Pre-loaded mock scenarios (peering links down, interface config dump requests, routine maintenance scheduling).
+    *   Simulates the intent classifier, target device extractor, priority levels assignment, and displays the designated worker agent.
+    *   Automatically drafts title and body templates for direct Jira ticket creations.
+
+

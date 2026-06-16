@@ -16,7 +16,8 @@ from greennode_agentbase import (
 )
 
 from system_prompt import SYSTEM_PROMPT
-from telegram_bot import start_telegram_bot
+from slack_bot import start_slack_bot, send_slack_message, SLACK_CHANNEL_ALERTS
+from email_gateway import start_email_gateway
 
 load_dotenv()
 
@@ -79,14 +80,15 @@ def parse_json_garbage(text: str) -> dict:
     return json.loads(text)
 
 
-def run_supervisor_loop(session_id: str, user_message: str = None) -> str:
+def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str = None) -> str:
     """Load state, query router LLM, route to next worker, or conclude."""
     state = StateManager.get_state(session_id)
     
     if not state:
         state = {
             "session_id": session_id,
-            "alert_source": "User report",
+            "user_id": user_id,
+            "alert_source": "User report" if user_id else "Monitoring system",
             "symptoms": user_message or "Diagnostic request",
             "affected_entities": [],
             "inventory_context": {},
@@ -97,6 +99,8 @@ def run_supervisor_loop(session_id: str, user_message: str = None) -> str:
             "loop_count": 0,
             "messages": []
         }
+    elif user_id:
+        state["user_id"] = user_id
     
     if user_message:
         state["messages"].append({"role": "user", "content": user_message})
@@ -142,9 +146,31 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
         incident_class = res_json.get("incident_class", "Service").strip()
         reasoning = res_json.get("reasoning", "").strip()
         intent = res_json.get("intent", "INCIDENT_RESPONSE").strip()
+        priority = res_json.get("priority", "P3").strip()
         
-        logger.info(f"Supervisor Route Decision: {next_agent} | Intent: {intent} | Incident Class: {incident_class} | Reason: {reasoning}")
-        state["diagnostic_logs"].append(f"Supervisor decision: Route to {next_agent} (Intent: {intent}). Reason: {reasoning}")
+        state["priority"] = priority
+        
+        logger.info(f"Supervisor Route Decision: {next_agent} | Priority: {priority} | Intent: {intent} | Incident Class: {incident_class} | Reason: {reasoning}")
+        
+        if priority == "P1":
+            logger.warning(f"CRITICAL P1 ALERT DETECTED for session {session_id}. Triggering L3 Slack alarm.")
+            if not state.get("p1_alert_sent"):
+                send_slack_message(
+                    SLACK_CHANNEL_ALERTS,
+                    f"<!channel> 🚨 *CRITICAL P1 ALERT* - Core infrastructure incident detected!\n"
+                    f"*Symptoms:* {state.get('symptoms', 'Unknown core link/BGP down')}\n"
+                    f"AI Agent is immediately escalating to L3 NOC Team. Direct intervention required!"
+                )
+                state["p1_alert_sent"] = True
+                # Override next agent to escalate immediately
+                next_agent = "customer-advisory-agent"
+                reasoning = "SLA P1 detected - bypassing auto-remediation, escalating to L3 human engineers."
+            else:
+                # Escalation has already run and triggered callback. Conclude session.
+                next_agent = "FINISH"
+                reasoning = "SLA P1 escalation completed. Concluding supervisor loop."
+            
+        state["diagnostic_logs"].append(f"Supervisor decision: Route to {next_agent} (Intent: {intent}, Priority: {priority}). Reason: {reasoning}")
         state["current_assignee"] = next_agent
         
         StateManager.save_state(session_id, state)
@@ -174,13 +200,11 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
                 
         threading.Thread(target=_trigger, daemon=True).start()
         
-        # Return status update to user
-        status_map = {
-            "analytics-network-engineer-agent": "🔍 Hệ thống đang bắt đầu sàng lọc cảnh báo và phân tích sự cố (Triage/Analytics)...",
-            "expert-engineer-agent": "⚙️ Đang chuyển tiếp thông tin lỗi đến Kỹ sư Mạng chuyên gia để chạy chẩn đoán sâu...",
-            "customer-advisory-agent": "📝 Đang lập báo cáo dịch vụ và soạn thảo hướng dẫn tự xử lý cho khách hàng..."
-        }
-        return status_map.get(next_agent, f"Đang chuyển tiếp xử lý đến {next_agent}...")
+        # Return AI-generated status update to user
+        ai_response = res_json.get("response", "").strip()
+        if ai_response:
+            return ai_response
+        return f"Đang chuyển tiếp xử lý đến {next_agent}..."
         
     except Exception as e:
         logger.error(f"Error in Supervisor loop: {e}", exc_info=True)
@@ -193,14 +217,14 @@ def process_message(message: str, user_id: str, session_id: str) -> str:
     if cmd in ["/new", "/newchat", "/reset"]:
         redis_client.delete(f"state:{session_id}")
         return "🧹 *Đã xóa lịch sử phiên chat cũ.* Phiên chat mới của bạn đã được khởi tạo! Hãy hỏi tôi bất kỳ câu hỏi nào. 🚀"
-    return run_supervisor_loop(session_id, message)
+    return run_supervisor_loop(session_id, message, user_id)
 
 
 @app.entrypoint
 def handler(payload: dict, context: RequestContext) -> dict:
     """Standard HTTP Entrypoint."""
-    user_id = context.user_id or "monitoring-system"
-    session_id = context.session_id or "monitoring-session"
+    user_id = payload.get("user_id") or context.user_id or "monitoring-system"
+    session_id = payload.get("session_id") or context.session_id or "monitoring-session"
 
     # Handle webhook from Prometheus Alertmanager
     if "alerts" in payload:
@@ -214,6 +238,8 @@ def handler(payload: dict, context: RequestContext) -> dict:
             alert_details.append(f"Thiết bị: {device} | Cảnh báo: {alert_name} | Chi tiết: {summary}")
         
         alert_summary = "; ".join(alert_details)
+        
+        send_slack_message(SLACK_CHANNEL_ALERTS, f"🚨 *New Alert Received*\n{alert_summary}")
         
         # Initialize Redis State for Webhook
         state = {
@@ -244,11 +270,11 @@ def handler(payload: dict, context: RequestContext) -> dict:
         sender = payload.get("sender", "unknown")
         logger.info(f"Received callback from worker {sender} for session {session_id_cb}")
         
-        # Resume the supervisor loop
-        run_supervisor_loop(session_id_cb)
+        # Resume the supervisor loop asynchronously to prevent worker read timeouts
+        threading.Thread(target=run_supervisor_loop, args=(session_id_cb,), daemon=True).start()
         return {
             "status": "success",
-            "message": "Callback processed",
+            "message": "Callback triggered",
             "timestamp": datetime.now().isoformat()
         }
 
@@ -268,17 +294,23 @@ def health_check() -> PingStatus:
     return PingStatus.HEALTHY
 
 
-# --- Telegram Bot Launch ---
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+# --- Slack Bot Launch ---
+slack_thread = threading.Thread(
+    target=start_slack_bot,
+    args=(process_message,),
+    daemon=True,
+)
+slack_thread.start()
+logger.info("Slack bot thread launched")
 
-if TELEGRAM_BOT_TOKEN:
-    telegram_thread = threading.Thread(
-        target=start_telegram_bot,
-        args=(process_message, TELEGRAM_BOT_TOKEN),
-        daemon=True,
-    )
-    telegram_thread.start()
-    logger.info("Telegram bot thread launched")
+# --- Email Gateway Launch ---
+email_thread = threading.Thread(
+    target=start_email_gateway,
+    args=(process_message,),
+    daemon=True,
+)
+email_thread.start()
+logger.info("Email Gateway thread launched")
 
 if __name__ == "__main__":
     app.run(port=8080, host="0.0.0.0")

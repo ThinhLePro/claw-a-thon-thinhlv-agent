@@ -79,8 +79,8 @@ def _mcp_type_to_python(json_type: str) -> type:
     return mapping.get(json_type, str)
 
 
-def discover_mcp_tools(mcp_server_url: str, max_retries: int = 5) -> list:
-    """Connect to MCP server, list tools, auto-create LangChain tool wrappers.
+def discover_mcp_tools(mcp_server_url: str, agent_name: str = None, redis_client: Any = None, max_retries: int = 5) -> list:
+    """Connect to MCP server, list tools, auto-create LangChain tool wrappers, and filter by Redis ACL.
     """
     from mcp import ClientSession
     from mcp.client.sse import sse_client
@@ -119,9 +119,28 @@ def discover_mcp_tools(mcp_server_url: str, max_retries: int = 5) -> list:
                     f"Last error: {last_error}"
                 ) from last_error
 
+    allowed_tools = set()
+    if agent_name and redis_client:
+        try:
+            key = f"acl:tools:{agent_name}"
+            members = redis_client.smembers(key)
+            if members:
+                allowed_tools = set(members)
+                logger.info(f"Loaded {len(allowed_tools)} allowed tools from Redis ACL for {agent_name}: {allowed_tools}")
+            else:
+                logger.warning(f"No allowed tools found in Redis for {agent_name}. Will allow all tools.")
+        except Exception as e:
+            logger.error(f"Failed to fetch tool ACL from Redis for {agent_name}: {e}")
+
     langchain_tools = []
     for mcp_tool in mcp_tools:
         tool_name = mcp_tool.name
+        
+        # Apply Redis ACL filter if configured
+        if allowed_tools and tool_name not in allowed_tools:
+            logger.debug(f"Skipping tool '{tool_name}' - not in ACL for {agent_name}")
+            continue
+
         tool_description = mcp_tool.description or f"MCP tool: {tool_name}"
         input_schema = mcp_tool.inputSchema or {}
 

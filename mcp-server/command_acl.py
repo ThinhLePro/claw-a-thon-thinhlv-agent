@@ -78,6 +78,8 @@ class CommandACL:
         # Step 1: Check blacklist first (highest priority)
         command_lower = command_stripped.lower()
         for keyword in self.blacklist_keywords:
+            if keyword == "set " and "display set" in command_lower:
+                continue
             if command_lower.startswith(keyword) or f" {keyword}" in f" {command_lower}":
                 logger.warning(f"Command ACL BLOCKED (blacklist): '{command_stripped}' matched keyword '{keyword}'")
                 return False, f"BLOCKED: Command contains blacklisted keyword '{keyword.strip()}'. Configuration and system commands must go through the propose_network_change workflow."

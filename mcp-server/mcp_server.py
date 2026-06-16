@@ -206,7 +206,15 @@ def execute_command_on_device(device_name: str, command: str, timeout: int = Non
     if connection_method == "netconf":
         dev = pool.get(device_name)
         res = dev.rpc.cli(command, format='text')
-        content = res.text if res.text else res.findtext('cli-out')
+        if isinstance(res, bool):
+            return f"Command '{command}' executed on {device_name} (success: {res})."
+            
+        content = None
+        if hasattr(res, "text") and res.text:
+            content = res.text
+        elif hasattr(res, "findtext"):
+            content = res.findtext('cli-out') or res.findtext('output')
+            
         if not content and isinstance(res, etree._Element):
             content = etree.tostring(res, pretty_print=True, encoding='utf-8').decode('utf-8')
         return content or f"No output returned by command '{command}' on {device_name}."
@@ -354,6 +362,51 @@ mcp = FastMCP(
     port=MCP_PORT,
     transport_security=ts
 )
+
+# ===================================================================
+# INITIALIZE TOOL ACL IN REDIS
+# ===================================================================
+def initialize_tool_acls():
+    """Register allowed tools for each agent in Redis on startup."""
+    try:
+        # Define the ACL map
+        acl_map = {
+            "analytics-network-engineer-agent": [
+                "create_jira_task", 
+                "query_previous_incidents",
+                "get_devices_list",
+                "get_device_detail"
+            ],
+            "expert-engineer-agent": [
+                "update_task_status", 
+                "add_task_comment", 
+                "check_task_status",
+                "view_network_status", 
+                "lookup_command_dictionary",
+                "get_devices_list",
+                "get_device_detail",
+                "get_device_configuration_list",
+                "get_device_configuration_detail"
+            ],
+            "customer-advisory-agent": [
+                "update_task_status", 
+                "add_task_comment", 
+                "remove_jira_task",
+                "check_task_status"
+            ]
+        }
+        for agent, tools_list in acl_map.items():
+            key = f"acl:tools:{agent}"
+            redis_client.delete(key)  # Clear old
+            if tools_list:
+                redis_client.sadd(key, *tools_list)
+        logger.info("Successfully initialized Tool ACLs in Redis.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Tool ACLs in Redis: {e}")
+
+# Run ACL initialization
+initialize_tool_acls()
+
 
 # ===================================================================
 # DEVICE INVENTORY TOOLS
@@ -745,6 +798,85 @@ def _text_to_adf(text: str) -> dict:
     }
 
 
+def _send_slack_cab_approval(issue_key: str, device_display: str, reason: str, config_payload: str):
+    """Post an approval request with Block Kit buttons to the CAB channel."""
+    slack_token = os.environ.get("SLACK_BOT_TOKEN")
+    channel_id = os.environ.get("SLACK_CHANNEL_APPROVALS", "#noc-cab-approvals")
+    
+    if not slack_token:
+        logger.warning("SLACK_BOT_TOKEN is not configured. Skipping Slack CAB notification.")
+        return
+        
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": f"🔔 CAB Approval Required: {issue_key}"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Device:* {device_display}\n*Reason:* {reason}"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*Proposed Configuration Diff:*\n```\n{config_payload}\n```"
+            }
+        },
+        {
+            "type": "actions",
+            "elements": [
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "Approve"
+                    },
+                    "style": "primary",
+                    "value": issue_key,
+                    "action_id": "approve_change"
+                },
+                {
+                    "type": "button",
+                    "text": {
+                        "type": "plain_text",
+                        "text": "Reject"
+                    },
+                    "style": "danger",
+                    "value": issue_key,
+                    "action_id": "reject_change"
+                }
+            ]
+        }
+    ]
+    
+    url = "https://slack.com/api/chat.postMessage"
+    headers = {
+        "Authorization": f"Bearer {slack_token}",
+        "Content-Type": "application/json; charset=utf-8"
+    }
+    payload = {
+        "channel": channel_id,
+        "text": f"CAB Approval Required for Change Request: {issue_key}",
+        "blocks": blocks
+    }
+    
+    try:
+        resp = req_lib.post(url, json=payload, headers=headers, timeout=10)
+        if resp.status_code == 200 and resp.json().get("ok"):
+            logger.info(f"Successfully posted CAB approval request to Slack for {issue_key}")
+        else:
+            logger.error(f"Failed to post CAB approval request: {resp.text}")
+    except Exception as e:
+        logger.error(f"Exception posting CAB approval request: {e}")
+
+
 @mcp.tool()
 def propose_network_change(
     device_ip: str,
@@ -817,13 +949,17 @@ def propose_network_change(
             data = resp.json()
             issue_key = data.get("key", "UNKNOWN")
             logger.info(f"Jira ticket created via propose_network_change: {issue_key}")
+            
+            # Send Slack CAB approval request
+            _send_slack_cab_approval(issue_key, device_display, reason, config_payload)
+            
             return (
                 f"✅ Change Request created successfully!\n"
                 f"📋 Jira Issue: **{issue_key}**\n"
                 f"🔗 Link: {JIRA_BASE_URL}/browse/{issue_key}\n"
                 f"📍 Device: {device_display}\n"
                 f"📝 Status: Pending Approval\n\n"
-                f"The engineering team will review and approve the change on Jira. "
+                f"The engineering team will review and approve the change on Slack. "
                 f"Once approved, the MCP Gateway will automatically push the configuration."
             )
         else:
@@ -1899,6 +2035,215 @@ def _update_jira_issue_status(issue_key: str, success: bool, log_text: str):
 
 
 # ===================================================================
+# JIRA TOOLS (Centralized from Agents)
+# ===================================================================
+
+_JIRA_TIMEOUT = 15
+
+def _jira_auth() -> tuple[str, str]:
+    return (JIRA_USER_EMAIL, JIRA_API_TOKEN)
+
+def _jira_headers() -> dict[str, str]:
+    return {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+def _is_jira_configured() -> bool:
+    return bool(JIRA_BASE_URL and JIRA_USER_EMAIL and JIRA_API_TOKEN)
+
+_STATUS_ALIASES: dict[str, list[str]] = {
+    "IN_PROGRESS": ["in progress", "start progress", "in-progress"],
+    "WAITING":     ["waiting", "wait", "blocked", "on hold"],
+    "ERROR":       ["error", "fail", "failed"],
+    "DONE":        ["done", "complete", "resolve", "closed", "close"],
+}
+
+def _find_transition_id(issue_key: str, target_status: str) -> tuple[str | None, str]:
+    url = f"{JIRA_BASE_URL}/rest/api/3/issue/{issue_key}/transitions"
+    resp = req_lib.get(url, auth=_jira_auth(), headers=_jira_headers(), timeout=_JIRA_TIMEOUT)
+    if resp.status_code != 200:
+        return None, f"Failed to fetch transitions for {issue_key}: HTTP {resp.status_code} — {resp.text[:500]}"
+
+    transitions = resp.json().get("transitions", [])
+    if not transitions:
+        return None, f"No transitions available for {issue_key}. The ticket may already be in a terminal state."
+
+    target_norm = target_status.strip().upper().replace(" ", "_")
+    aliases = _STATUS_ALIASES.get(target_norm, [target_status.lower()])
+
+    for t in transitions:
+        t_name_lower = t["name"].lower()
+        for alias in aliases:
+            if alias in t_name_lower:
+                return t["id"], t["name"]
+
+    available = ", ".join(f'"{t["name"]}"' for t in transitions)
+    return None, f"No transition matching '{target_status}' found for {issue_key}. Available transitions: {available}"
+
+@mcp.tool()
+def create_jira_task(summary: str, description: str, issue_type: str = "Task") -> str:
+    """Create a new ticket on the Jira KAN board. issue_type can be 'Task', 'Incident', 'Service Request', or 'Change Request'."""
+    if not _is_jira_configured():
+        return "Error: Jira is not configured. Missing JIRA_BASE_URL, JIRA_USER_EMAIL, or JIRA_API_TOKEN."
+
+    payload = {
+        "fields": {
+            "project": {"key": JIRA_PROJECT_KEY},
+            "summary": summary,
+            "description": _text_to_adf(description),
+            "issuetype": {"name": issue_type},
+        }
+    }
+
+    try:
+        url = f"{JIRA_BASE_URL}/rest/api/3/issue"
+        resp = req_lib.post(url, json=payload, auth=_jira_auth(), headers=_jira_headers(), timeout=_JIRA_TIMEOUT)
+        if resp.status_code in (200, 201):
+            data = resp.json()
+            issue_key = data.get("key", "UNKNOWN")
+            logger.info(f"Jira ticket created: {issue_key}")
+            return (
+                f"✅ Đã tạo ticket Jira: **{issue_key}**\n"
+                f"Link: {JIRA_BASE_URL}/browse/{issue_key}\n"
+                f"Summary: {summary}"
+            )
+        else:
+            error_detail = resp.text[:800]
+            logger.error(f"Jira create failed: HTTP {resp.status_code} — {error_detail}")
+            return f"Error creating Jira ticket: HTTP {resp.status_code} — {error_detail}"
+    except Exception as e:
+        logger.error(f"Jira create exception: {e}")
+        return f"Error creating Jira ticket: {e}"
+
+@mcp.tool()
+def update_task_status(issue_key: str, target_status: str) -> str:
+    """Change the status of a Jira ticket. target_status can be 'IN_PROGRESS', 'WAITING', 'ERROR', or 'DONE'."""
+    if not _is_jira_configured():
+        return "Error: Jira is not configured."
+
+    transition_id, match_info = _find_transition_id(issue_key, target_status)
+    if transition_id is None:
+        return f"Error: {match_info}"
+
+    payload = {"transition": {"id": transition_id}}
+
+    try:
+        url = f"{JIRA_BASE_URL}/rest/api/3/issue/{issue_key}/transitions"
+        resp = req_lib.post(url, json=payload, auth=_jira_auth(), headers=_jira_headers(), timeout=_JIRA_TIMEOUT)
+        if resp.status_code == 204:
+            logger.info(f"Jira {issue_key} transitioned to '{match_info}'")
+            return f"✅ Ticket {issue_key} đã chuyển sang trạng thái: **{match_info}**"
+        else:
+            error_detail = resp.text[:500]
+            logger.error(f"Jira transition failed: HTTP {resp.status_code} — {error_detail}")
+            return f"Error transitioning {issue_key}: HTTP {resp.status_code} — {error_detail}"
+    except Exception as e:
+        logger.error(f"Jira transition exception: {e}")
+        return f"Error transitioning {issue_key}: {e}"
+
+@mcp.tool()
+def add_task_comment(issue_key: str, comment_body: str) -> str:
+    """Add a comment (log entry / report) to a Jira ticket."""
+    if not _is_jira_configured():
+        return "Error: Jira is not configured."
+
+    payload = {"body": _text_to_adf(comment_body)}
+
+    try:
+        url = f"{JIRA_BASE_URL}/rest/api/3/issue/{issue_key}/comment"
+        resp = req_lib.post(url, json=payload, auth=_jira_auth(), headers=_jira_headers(), timeout=_JIRA_TIMEOUT)
+        if resp.status_code in (200, 201):
+            comment_id = resp.json().get("id", "?")
+            logger.info(f"Comment added to {issue_key}")
+            return f"✅ Đã ghi comment vào ticket {issue_key} (comment #{comment_id})"
+        else:
+            error_detail = resp.text[:500]
+            logger.error(f"Jira comment failed: HTTP {resp.status_code} — {error_detail}")
+            return f"Error adding comment to {issue_key}: HTTP {resp.status_code} — {error_detail}"
+    except Exception as e:
+        logger.error(f"Jira comment exception: {e}")
+        return f"Error adding comment to {issue_key}: {e}"
+
+@mcp.tool()
+def query_previous_incidents(device_ip: str) -> str:
+    """Search Jira for previous incident tasks related to a specific device IP or hostname."""
+    if not _is_jira_configured():
+        return "Error: Jira is not configured."
+
+    jql = f'project = "{JIRA_PROJECT_KEY}" AND (summary ~ "{device_ip}" OR description ~ "{device_ip}")'
+
+    try:
+        url = f"{JIRA_BASE_URL}/rest/api/3/search"
+        resp = req_lib.get(url, params={"jql": jql, "maxResults": 10}, auth=_jira_auth(), headers=_jira_headers(), timeout=_JIRA_TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            issues = data.get("issues", [])
+            if not issues:
+                return f"No previous incidents found on Jira for device {device_ip}."
+
+            lines = [f"Found {len(issues)} previous incident(s) for device {device_ip}:"]
+            for issue in issues:
+                key = issue.get("key")
+                fields = issue.get("fields", {})
+                summary = fields.get("summary", "No Summary")
+                status = fields.get("status", {}).get("name", "Unknown")
+                created = fields.get("created", "Unknown")[:10]
+                lines.append(f"- **{key}** ({status}) | Created: {created} | Summary: {summary}")
+            return "\n".join(lines)
+        else:
+            error_detail = resp.text[:500]
+            logger.error(f"Jira search failed: HTTP {resp.status_code} — {error_detail}")
+            return f"Error searching Jira: HTTP {resp.status_code} — {error_detail}"
+    except Exception as e:
+        logger.error(f"Jira search exception: {e}")
+        return f"Error searching Jira: {e}"
+
+@mcp.tool()
+def check_task_status(issue_key: str) -> str:
+    """Check the current status and assignee of a Jira ticket."""
+    if not _is_jira_configured():
+        return "Error: Jira is not configured."
+
+    try:
+        url = f"{JIRA_BASE_URL}/rest/api/3/issue/{issue_key}"
+        resp = req_lib.get(url, auth=_jira_auth(), headers=_jira_headers(), timeout=_JIRA_TIMEOUT)
+        if resp.status_code == 200:
+            data = resp.json()
+            fields = data.get("fields", {})
+            status = fields.get("status", {}).get("name", "Unknown")
+            assignee = fields.get("assignee")
+            assignee_name = assignee.get("displayName", "Unassigned") if assignee else "Unassigned"
+            summary = fields.get("summary", "No Summary")
+            return f"Ticket {issue_key}:\n- Status: {status}\n- Assignee: {assignee_name}\n- Summary: {summary}"
+        else:
+            error_detail = resp.text[:500]
+            return f"Error checking ticket {issue_key}: HTTP {resp.status_code} — {error_detail}"
+    except Exception as e:
+        logger.error(f"Jira check status exception: {e}")
+        return f"Error checking ticket {issue_key}: {e}"
+
+@mcp.tool()
+def remove_jira_task(issue_key: str) -> str:
+    """Delete a Jira ticket completely."""
+    if not _is_jira_configured():
+        return "Error: Jira is not configured."
+
+    try:
+        url = f"{JIRA_BASE_URL}/rest/api/3/issue/{issue_key}"
+        resp = req_lib.delete(url, auth=_jira_auth(), headers=_jira_headers(), timeout=_JIRA_TIMEOUT)
+        if resp.status_code == 204:
+            logger.info(f"Jira {issue_key} has been deleted.")
+            return f"✅ Ticket {issue_key} đã được xóa thành công."
+        else:
+            error_detail = resp.text[:500]
+            return f"Error deleting ticket {issue_key}: HTTP {resp.status_code} — {error_detail}"
+    except Exception as e:
+        logger.error(f"Jira delete exception: {e}")
+        return f"Error deleting ticket {issue_key}: {e}"
+
+
+# ===================================================================
 # STARTUP — Main entry point
 # ===================================================================
 
@@ -1997,6 +2342,44 @@ if __name__ == "__main__":
             config_match = re.search(r"--- CONFIGURATION PAYLOAD ---\n(.*?)(?:\n--- |$)", full_text, re.DOTALL)
             if config_match:
                 config_payload = config_match.group(1).strip()
+
+        # Robust fallback: Fetch ticket details directly from Jira API if payload lacks details
+        if not device_name or not config_payload:
+            logger.info(f"Missing device or config in webhook payload for {issue_key}. Fetching details directly from Jira...")
+            try:
+                jira_url = f"{JIRA_BASE_URL}/rest/api/3/issue/{issue_key}"
+                resp = req_lib.get(
+                    jira_url,
+                    auth=(JIRA_USER_EMAIL, JIRA_API_TOKEN),
+                    headers={"Accept": "application/json"},
+                    timeout=15
+                )
+                if resp.status_code == 200:
+                    jira_data = resp.json()
+                    jira_desc = jira_data.get("fields", {}).get("description", {})
+                    if isinstance(jira_desc, dict):
+                        full_text = ""
+                        for block in jira_desc.get("content", []):
+                            for node in block.get("content", []):
+                                if node.get("type") == "text":
+                                    full_text += node.get("text", "")
+                                elif node.get("type") == "hardBreak":
+                                    full_text += "\n"
+                            full_text += "\n"
+                        
+                        import re
+                        device_match = re.search(r"📍 Device:\s*(.+?)(?:\n|$)", full_text)
+                        if device_match:
+                            device_name = device_match.group(1).strip()
+                            if "(" in device_name:
+                                device_name = device_name.split("(")[0].strip()
+
+                        config_match = re.search(r"--- CONFIGURATION PAYLOAD ---\n(.*?)(?:\n--- |$)", full_text, re.DOTALL)
+                        if config_match:
+                            config_payload = config_match.group(1).strip()
+                            logger.info(f"Successfully fetched and parsed description from Jira for {issue_key}.")
+            except Exception as e:
+                logger.error(f"Failed to query Jira for fallback description of {issue_key}: {e}")
 
         if not device_name or not config_payload:
             logger.error(f"Webhook for {issue_key}: could not parse device or config from description")
@@ -2335,6 +2718,8 @@ if __name__ == "__main__":
         Route("/admin/api/sessions/{session_id}/clear", admin_clear_session, methods=["POST"]),
         Route("/admin/api/parser/trigger", admin_trigger_parser, methods=["POST"]),
     ]
+
+
 
     logger.info(f"Starting FastMCP server with SSE transport on port {MCP_PORT}...")
     logger.info(f"Jira webhook endpoint: POST /webhook/jira")

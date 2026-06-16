@@ -18,7 +18,7 @@ services:
   # ============================================
   mcp-server:
     build: ./mcp-server
-    container_name: juniper-mcp-server
+    container_name: netbot-mcp-server
     restart: unless-stopped
     ports:
       - "8980:8980"
