@@ -190,14 +190,14 @@
       "role": "Super Spine Switch",
       "status": "Online"
     },
-    "LAB-EX4400-01-VNPT": {
-      "name": "LAB-EX4400-01-VNPT",
+    "LAB-INTERNET-GATEWAY-01": {
+      "name": "LAB-INTERNET-GATEWAY-01",
       "ip": "10.116.0.54",
       "port": 830,
-      "model": "ex4400-48t",
+      "model": "mx240",
       "vendor": "juniper",
       "connection_method": "netconf",
-      "role": "Provider Switch",
+      "role": "Gateway Router",
       "status": "Online"
     },
     "LAB-QFX10K8-GW-01": {

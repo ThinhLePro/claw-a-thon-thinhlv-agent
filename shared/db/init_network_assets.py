@@ -148,6 +148,7 @@ def main():
         (2, "Customer A (Viettel IDC)", "customer-a", "Premium Customer A co-located at Viettel IDC"),
         (3, "Customer B (FPT Telecom)", "customer-b", "Customer B using core routing fabric"),
         (4, "NOC Operations Team", "noc-ops", "Internal operations network management"),
+        (5, "Customer-001", "customer-001", "Customer-001 with proxy server"),
     ]
     cur.executemany("INSERT INTO netbox_tenants VALUES (?,?,?,?)", tenants)
 
@@ -157,6 +158,7 @@ def main():
         (2, 101, "VLAN_101_DB_A", "active", 2, "Database private network for Customer A"),
         (3, 200, "VLAN_200_WEB_B", "active", 3, "Web App VLAN for Customer B"),
         (4, 999, "VLAN_999_MGMT", "active", 4, "NOC Infrastructure Management Network"),
+        (5, 300, "VLAN_300_PROXY_001", "active", 5, "Proxy Server VLAN for Customer-001"),
     ]
     cur.executemany("INSERT INTO netbox_vlans VALUES (?,?,?,?,?,?)", vlans)
 
@@ -262,6 +264,13 @@ def main():
                 interface_records.append((interface_id, traffic_if_name, device_id, 1, traffic_mac, "access", untagged_vlan, None))
                 interface_id += 1
                 
+        elif "Gateway Router" in role:
+            # ge-0/0/47 for Proxy connection
+            traffic_if_name = "ge-0/0/47"
+            traffic_mac = f"00:50:56:{device_id:02x}:33:47"
+            interface_records.append((interface_id, traffic_if_name, device_id, 1, traffic_mac, "access", 5, None)) # VLAN 300 (Customer-001)
+            interface_id += 1
+            
         # Generate licenses
         if vendor == "juniper":
             lic_key = f"JUNOS-{model.upper()}-ADV-{device_id:04d}"
@@ -298,6 +307,8 @@ def main():
         # Customer B Web servers (VLAN 200)
         {"name": "customer-b-web-01", "ip": "10.200.0.70", "tenant_id": 3, "rack": "Rack-C03", "vlan": 3, "desc": "Customer B Frontend Web Server 01"},
         {"name": "customer-b-app-01", "ip": "10.200.0.80", "tenant_id": 3, "rack": "Rack-C03", "vlan": 3, "desc": "Customer B Application Server 01"},
+        # Customer-001 Proxy Server (VLAN 300)
+        {"name": "customer-001-proxy-01", "ip": "14.238.122.111", "tenant_id": 5, "rack": "Rack-C04", "vlan": 5, "desc": "Customer-001 Proxy Server 01"},
     ]
 
     for srv in custom_servers:
@@ -385,6 +396,9 @@ def main():
     # NOC internal servers (noc-portal-app & net-monitor) connect to Leaf 1 ge-0/0/8 and ge-0/0/9
     link_interfaces(cur, "noc-portal-app", "eth0", "LAB_LEAF.01", "ge-0/0/8")
     link_interfaces(cur, "net-monitor", "eth0", "LAB_LEAF.01", "ge-0/0/9")
+
+    # Customer-001 Proxy Server connects to LAB-INTERNET-GATEWAY-01 ge-0/0/47
+    link_interfaces(cur, "customer-001-proxy-01", "eth0", "LAB-INTERNET-GATEWAY-01", "ge-0/0/47")
 
     # Save cabling
     conn.commit()

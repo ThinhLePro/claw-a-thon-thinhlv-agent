@@ -129,6 +129,8 @@ def run_advisory_work(session_id: str):
             calling_tenant = "customer-a"
         elif "customer-b" in user_id.lower():
             calling_tenant = "customer-b"
+        elif "customer-001" in user_id.lower():
+            calling_tenant = "customer-001"
 
     agent_input = f"""Incident Symptoms: {state['symptoms']}
 Reporting User: {user_id}

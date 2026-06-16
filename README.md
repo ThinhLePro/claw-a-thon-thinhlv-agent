@@ -285,5 +285,30 @@ A background Telegram bot (`telegram_bot.py`) can be enabled on the Supervisor A
 *   **AI Session Logs Retrieval**: Send `/logs <session_id>` to fetch and output the entire execution and diagnostic logs of a specific AI incident.
 *   **Auto-notifications**: When a session finishes (`FINISH`), the bot automatically pushes a structured incident completion summary to the chat ID configured in `TELEGRAM_CHAT_ID`.
 
+---
+
+## DDoS Simulation Workflow & Testing
+
+The system supports simulating a DDoS attack targeting a customer's proxy IP (`14.238.122.111` belonging to `customer-001`). 
+
+### Scenario Description
+1. **Target**: Customer Proxy Server IP `14.238.122.111` (on interface `ge-0/0/47` of `LAB-INTERNET-GATEWAY-01`, IP: `10.116.0.54`).
+2. **Symptom**: Legitimate connectivity is disrupted. The interface `ge-0/0/47` is flooded with inbound traffic, saturating the 1Gbps link (~965 Mbps input rate, 0 bps output rate).
+3. **AI Pipeline Execution**:
+   - **Supervisor Agent** routes the incoming customer check request to the **Senior Network Engineer Agent**.
+   - The **Senior Network Engineer Agent** queries the NetBox database to verify the IP's tenant ownership. It then calls the MCP tool to run `show interfaces ge-0/0/47` on `LAB-INTERNET-GATEWAY-01` (`10.116.0.54`).
+   - Observing the high input rate and 0 output rate, it diagnoses the issue as a DDoS attack.
+   - The agent proposes a mitigation change (Firewall Filter `BLOCK-DDOS-14.238.122.111` to discard the attack traffic) via Jira ticket.
+   - **Supervisor Agent** escalates the ticket to P1, triggers a critical Slack alert to `#noc-l3-alerts`, and hands over to **Customer Advisory Agent**.
+   - **Customer Advisory Agent** sends a Vietnamese report back to the customer, warning them of the DDoS attack, and transitions the Jira ticket to `WAITING` status awaiting L3 Human Engineer CAB approval.
+
+### Running the DDoS Simulation
+Run the simulation script:
+```bash
+mcp-env/bin/python scratch/simulate_ddos_flow.py
+```
+This script initializes the Redis session state and triggers the orchestrator loop, logging diagnostic logs in real-time until completion.
+
+
 
 
