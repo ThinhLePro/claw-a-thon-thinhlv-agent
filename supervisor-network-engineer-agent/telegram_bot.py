@@ -138,7 +138,7 @@ def start_telegram_bot(process_message_fn, bot_token: str):
 
             log_text = f"📋 <b>Session Logs for <code>{html.escape(session_id)}</code></b>\n"
             log_text += f"━━━━━━━━━━━━━━━━━━━\n"
-            log_text += f"▪️ <b>Symptoms</b>: {html.escape(symptoms)}\n"
+            log_text += f"▪️ <b>Symptoms</b>: {markdown_to_telegram_html(symptoms)}\n"
             log_text += f"▪️ <b>Jira Ticket</b>: <code>{html.escape(jira)}</code>\n"
             log_text += f"▪️ <b>Current Assignee</b>: <code>{html.escape(assignee)}</code>\n"
             log_text += f"━━━━━━━━━━━━━━━━━━━\n\n"
@@ -148,7 +148,7 @@ def start_telegram_bot(process_message_fn, bot_token: str):
             else:
                 log_text += "<b>Diagnostic History:</b>\n"
                 for idx, log_entry in enumerate(logs, 1):
-                    log_text += f"{idx}. {html.escape(log_entry)}\n"
+                    log_text += f"{idx}. {markdown_to_telegram_html(log_entry)}\n"
 
             # Check message length
             if len(log_text) <= 4096:

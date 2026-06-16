@@ -20,6 +20,7 @@ from system_prompt import SYSTEM_PROMPT
 from slack_bot import start_slack_bot, send_slack_message, SLACK_CHANNEL_ALERTS
 from email_gateway import start_email_gateway
 from telegram_bot import start_telegram_bot
+from markdown_converter import markdown_to_telegram_html
 
 load_dotenv()
 
@@ -210,12 +211,12 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
                 
                 log_text = f"📋 <b>Session Completed: <code>{html.escape(session_id)}</code></b>\n"
                 log_text += f"━━━━━━━━━━━━━━━━━━━\n"
-                log_text += f"▪️ <b>Symptoms</b>: {html.escape(symptoms)}\n"
+                log_text += f"▪️ <b>Symptoms</b>: {markdown_to_telegram_html(symptoms)}\n"
                 log_text += f"▪️ <b>Jira Ticket</b>: <code>{html.escape(jira)}</code>\n"
                 log_text += f"━━━━━━━━━━━━━━━━━━━\n\n"
                 log_text += "<b>Diagnostic History:</b>\n"
                 for idx, log_entry in enumerate(logs, 1):
-                    log_text += f"{idx}. {html.escape(log_entry)}\n"
+                    log_text += f"{idx}. {markdown_to_telegram_html(log_entry)}\n"
                 
                 send_telegram_message(log_text)
             except Exception as tg_ex:
