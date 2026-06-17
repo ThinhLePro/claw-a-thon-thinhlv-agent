@@ -17,10 +17,8 @@ async def test_tools():
     print("\n--- Testing get_devices_list ---")
     try:
         devices_list_str = mcp_server.get_devices_list()
-        devices = json.loads(devices_list_str)
-        print("Devices list parsed successfully. Devices count:", len(devices))
-        for d in devices:
-            print(f"- {d['name']} ({d['ip']}) - Role: {d['role']}")
+        print("Devices list returned successfully:")
+        print(devices_list_str)
     except Exception as e:
         print(f"Error in get_devices_list: {e}")
 

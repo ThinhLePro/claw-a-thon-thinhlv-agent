@@ -32,3 +32,7 @@ scratch-venv/
 scratch-redis-install/
 old-code/
 *.db
+video-demo.mp4
+team_thumbnail.png
+submit_info.md
+DEMO_SCRIPT.md
