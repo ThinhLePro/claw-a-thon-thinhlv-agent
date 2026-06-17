@@ -1,4 +1,4 @@
-# Hierarchical Multi-Agent Network NOC — AI Agents + MCP Gateway
+# The Next-Gen NOC Engineer: Hierarchical Multi-Agent & MCP-Powered Network Automation
 
 An autonomous, hierarchical Multi-Agent Network Operations Center (NOC) system powered by LangChain, deployed on **GreenNode AgentBase**, with a local **MCP (Model Context Protocol) server** providing real-time access to Juniper datacenter devices via NETCONF.
 
