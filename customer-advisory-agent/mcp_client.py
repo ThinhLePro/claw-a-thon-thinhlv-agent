@@ -171,6 +171,14 @@ def discover_mcp_tools(mcp_server_url: str, agent_name: str = None, redis_client
 
         def _make_tool_fn(captured_name: str, captured_url: str):
             def tool_fn(**kwargs) -> str:
+                if captured_name == "send_notification":
+                    if not kwargs.get("session_id"):
+                        try:
+                            from context import thread_local
+                            if hasattr(thread_local, "session_id") and thread_local.session_id:
+                                kwargs["session_id"] = thread_local.session_id
+                        except Exception as ex:
+                            logger.warning(f"Failed to auto-inject session_id from thread_local: {ex}")
                 return call_mcp_tool(captured_url, captured_name, kwargs)
             return tool_fn
 

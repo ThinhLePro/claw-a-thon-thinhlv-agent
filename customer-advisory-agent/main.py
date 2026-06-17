@@ -18,6 +18,7 @@ from greennode_agentbase import (
 
 from system_prompt import CUSTOMER_ADVISORY_PROMPT
 from mcp_client import discover_mcp_tools
+from context import thread_local
 from agent_tools import (
     read_file,
     write_file,
@@ -105,6 +106,7 @@ agent = create_agent(
 
 def run_advisory_work(session_id: str):
     """Run customer advisory agent logic."""
+    thread_local.session_id = session_id
     state = StateManager.get_state(session_id)
     if not state:
         logger.error(f"Session state not found for {session_id}")
@@ -125,7 +127,8 @@ def run_advisory_work(session_id: str):
             calling_tenant = "customer-001"
 
     user_profile = state.get("user_profile", {})
-    agent_input = f"""Incident Symptoms: {state['symptoms']}
+    agent_input = f"""Session ID: {session_id}
+Incident Symptoms: {state['symptoms']}
 Reporting User: {user_id}
 User Profile: {json.dumps(user_profile, ensure_ascii=False)}
 Calling Tenant (slug): {calling_tenant}
