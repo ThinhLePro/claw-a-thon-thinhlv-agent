@@ -2,7 +2,7 @@
 
 An autonomous, hierarchical Multi-Agent Network Operations Center (NOC) system powered by LangChain, deployed on **GreenNode AgentBase**, with a local **MCP (Model Context Protocol) server** providing real-time access to Juniper datacenter devices via NETCONF.
 
-The system transitions from a single agent design to a team of 4 specialized AI agents orchestrated by a NOC Supervisor Agent.
+The system transitions from a single agent design to a team of 4 specialized AI agents orchestrated by a NOC Supervisor Agent, incorporating advanced loop control, CAB approval pause, and robust trace message parsing.
 
 ---
 
@@ -21,7 +21,8 @@ The system transitions from a single agent design to a team of 4 specialized AI 
  │      │                 NOC Supervisor Agent (Entrypoint)                        │      │
  │      │                 [supervisor-network-engineer-agent]                      │      │
  │      │                 - Decides next action (intent routing)                   │      │
- │      │                 - Maintains loop limit & manages global state            │      │
+ │      │                 - Controls loop limits, processes reworks, and pauses    │      │
+ │      │                   routing while waiting for CAB approval                 │      │
  │      └───────────┬────────────────────────┬────────────────────────┬────────────┘      │
  │                  │                        │                        │                   │
  │                  ▼                        ▼                        ▼                   │
@@ -34,6 +35,7 @@ The system transitions from a single agent design to a team of 4 specialized AI 
  │       │  - Incident triage   │ │ - Proposes changes   │ │ - L3 notifications   │       │
  │       │  - Creates Jira task │ │ - NETCONF CLI tools  │ │ - Closes Jira task   │       │
  │       └──────────┬───────────┘ └──────────┬───────────┘ └──────────┬───────────┘       │
+ │                  │                        │                        │                   │
  └──────────────────┼────────────────────────┼────────────────────────┼───────────────────┘
                     │                        │                        │
                     ├────────────────────────┴────────────────────────┤ SSE / HTTP
@@ -45,35 +47,131 @@ The system transitions from a single agent design to a team of 4 specialized AI 
  │     │                        On-Premises MCP Server                            │       │
  │     │                        - FastMCP Server + NETCONF CLI Wrapper            │       │
  │     │                        - Loads: shared/devices.json & shared/db/*.db     │       │
- │     └─────────────────────────────────────┬────────────────────────────────────┘       │
- │                                           │ NETCONF (SSH 830/22)                       │
- │                                           ▼                                            │
- │     ┌──────────────────────────────────────────────────────────────────────────┐       │
- │     │                      Lab Network Devices (MX, QFX, EX, SRX)              │       │
- │     └──────────────────────────────────────────────────────────────────────────┘       │
+ │     └───────────────────┬─────────────────────────────────────┬────────────────┘       │
+ │                         │ HTTP / Vector Search                │ NETCONF (SSH 830/22)   │
+ │                         ▼                                     ▼                        │
+ │     ┌────────────────────────────────────────┐   ┌───────────────────────────────────┐ │
+ │     │            RAG Engine Server           │   │       Lab Network Devices         │ │
+ │     │ - Vector DB (ISO, ITSM, Vendors Recs)  │   │       (MX, QFX, EX, SRX)          │ │
+ │     │ - 16,520 chunks (Juniper KB & Books)   │   │                                   │ │
+ │     └────────────────────────────────────────┘   └───────────────────────────────────┘ │
  └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Agent Roles & Hierarchy
+### System Components & Core Interactions
 
-1.  **NOC Supervisor Agent** (`supervisor-network-engineer-agent`):
+1. **Intake & Orchestration (NOC Supervisor Agent)**:
+   - Webhook events from **Prometheus Alertmanager** or messages from **Slack / Telegram** are received by the **NOC Supervisor Agent** (deployed on GreenNode Cloud Platform).
+   - The Supervisor is the main router: it parses intent, analyzes priority, updates the global session state in **Redis**, and dynamically routes tasks to worker agents while generating status updates.
+
+2. **Decoupled State & Routing Directory (Redis Cache)**:
+   - **Redis** serves as the central brain. It stores the global session data under `state:<session_id>` to preserve context between agent iterations.
+   - Worker endpoints are dynamically registered in Redis under `agent:url:<agent_name>` upon deployment, enabling asynchronous HTTP invocation and callback processing without hardcoded URLs.
+
+3. **Secure Local Access (On-Premises MCP Server)**:
+   - Worker agents interact with physical Juniper switches and routers (MX, QFX, EX, SRX) in the lab network using **Model Context Protocol (MCP)** tools hosted on an on-premises **MCP Server**.
+   - NETCONF commands are executed locally (SSH port 830/22), keeping sensitive datacenter data and raw configuration commands within the lab boundary.
+
+4. **Augmented Intelligence (RAG Engine)**:
+   - The MCP server exposes a `query_knowledge_base` vector search tool. Diagnosing agents query an internal **RAG Engine** indexing **16,520 document chunks** (consisting of Juniper KB Articles and reference design books/manuals) to fetch exact syntax references and stable Junos version guidelines.
+
+5. **Closed-Loop Workflow & ITIL Compliance**:
+   - The system integrates **Jira API** to manage ticket lifecycles (`TODO` -> `IN_PROGRESS` -> `WAITING` -> `DONE`).
+   - High-severity incidents trigger Level 3 alarms on Slack (`#noc-l3-alerts`).
+   - Proposing configuration changes triggers Block Kit approval buttons on Slack (`#noc-cab-approvals`) for the Human CAB, ensuring secure gatekeeping.
+   - Customer-facing reports are automatically published in English and Vietnamese directly to `#all-customer-001`.
+
+---
+
+## Hierarchical Multi-Agent Assignment & Routing
+
+To solve complex datacenter network incidents while adhering to the ITIL incident management framework, the system divides responsibilities among four specialized roles in a strict hierarchy.
+
+### 1. Agent Roles & Hierarchy
+
+*   **NOC Supervisor Agent** (`supervisor-network-engineer-agent`):
     *   **Role**: Router / Orchestrator.
-    *   **Responsibility**: Receives incoming user commands (via Slack `#all-customer-001`) or Prometheus Alertmanager webhooks (pushed to `#noc-l3-alerts`). Uses a router LLM to analyze the incident state and delegate the task to the correct worker agent while dynamically generating contextual transition messages to inform the user. It enforces a safety loop limit of 5 turns before auto-escalating to Level 3.
-2.  **Triage/Analytics Agent** (`analytics-network-engineer-agent`):
+    *   **Responsibility**: Receives incoming user commands (via Slack `#all-customer-001` / Telegram) or Prometheus Alertmanager webhooks (pushed to `#noc-l3-alerts`). Uses a router LLM to analyze the incident state and delegate the task to the correct worker agent while dynamically generating contextual transition messages.
+    *   **Advanced Controls**: Enforces a safety loop limit of 5 turns. If the Senior Engineer proposes a configuration change and is waiting for L3 approval/feedback, the Supervisor loop shifts to a `PAUSED` state to halt execution until the Human CAB takes action, avoiding force-escalation timeouts. When an L3 engineer requests rework, the Supervisor resets the loop turn count to `0` to provide a fresh execution budget.
+
+*   **Triage/Analytics Agent** (`analytics-network-engineer-agent`):
     *   **Role**: Incident Triager.
     *   **Responsibility**: Validates alerts, reviews hardware/software states, checks for link flapping, and creates the mandatory Jira ticket on the KAN board.
-3.  **Senior Network Engineer Agent** (`senior-network-engineer-agent`):
+
+*   **Senior Network Engineer Agent** (`senior-network-engineer-agent`):
     *   **Role**: Deep Diagnostician & Config Proposer.
-    *   **Responsibility**: Connects to datacenter switches/routers using NETCONF MCP tools, runs complex troubleshooting workflows, proposes configuration changes (subject to L3 Human CAB approval), and updates Jira with detailed technical notes. Operates with a Senior mindset — always evaluates blast radius, HA topology, and consults L3 Human for uncertain decisions.
-4.  **Customer Advisory Agent** (`customer-advisory-agent`):
+    *   **Responsibility**: Connects to datacenter switches/routers using NETCONF MCP tools, runs troubleshooting workflows, proposes configuration changes (subject to L3 Human CAB approval), and updates Jira. Operates with a Senior mindset — evaluates blast radius, HA topology, and prompts for `**Final Answer:**` when diagnostic tasks complete.
+
+*   **Customer Advisory Agent** (`customer-advisory-agent`):
     *   **Role**: L3 Engineer Escalation & Customer Communicator.
-    *   **Responsibility**: Reviews the resolved incident logs, drafts customer-facing reports (Root Cause Analysis - RCA), and prepares self-help guidelines. Crucially, it manages two distinct notification channels: replying contextually to the **Customer** session, and escalating unresolved or limit-exceeded incidents to the internal **L3 Engineer** group via Slack. Finally, it transitions the Jira ticket to **DONE**.
+    *   **Responsibility**: Reviews incident logs, drafts bilingual customer-facing reports (Root Cause Analysis - RCA), manages internal L3 Slack escalation channels, and transitions the Jira ticket to **DONE**.
 
-### State & Orchestration Flow
+### 2. Multi-Agent Orchestration & Callback Protocol
 
-*   **Redis State Cache**: The global state of the conversation and incident metadata is cached in a centralized Redis database.
-*   **Routing Directory**: Worker URL endpoints are dynamically registered in Redis under `agent:url:<agent_name>` upon deployment.
-*   **Asynchronous Hand-off**: The supervisor agent invokes worker agents using asynchronous HTTP POST requests, which callback to the supervisor once their subtasks are completed.
+The agents do not poll each other; they communicate asynchronously using a **state-persisted callback protocol**:
+
+1.  **Orchestration Request**: The Supervisor evaluates the global session state and determines the `next_action` (e.g., routing to `senior-network-engineer-agent`).
+2.  **Asynchronous Invocation**: The Supervisor sends an HTTP POST request to the worker runtime URL `/invocations` with the `session_id` and runs the worker in a background thread to prevent connection timeouts.
+3.  **Worker Logic & Tools Execution**: The worker reads the current state from Redis, performs its diagnostics, updates Jira, runs CLI or RAG commands, and saves the updated diagnostic logs back to Redis.
+4.  **Completion Callback**: The worker sends an HTTP POST callback back to the Supervisor's webhook endpoint:
+    ```json
+    {
+      "action": "callback",
+      "session_id": "833146a2-d308-45c9-aafe-a2bcbd22055e",
+      "sender": "senior-network-engineer-agent"
+    }
+    ```
+5.  **Re-entry & Routing Evaluation**: The Supervisor intercepts the callback, resumes the orchestration loop, loads the newly written state from Redis, and makes the next routing routing decision.
+
+---
+
+## Redis Session & Directory State Management
+
+**Redis** serves as the central brain of the multi-agent NOC architecture, hosting the global state, session context, and dynamic routing directories.
+
+*   **Global Session Cache (`state:<session_id>`)**: Stores the unified JSON state accessed and modified by all 4 agents:
+    ```json
+    {
+      "session_id": "833146a2-d308-45c9-aafe-a2bcbd22055e",
+      "user_id": "slack-U0123456",
+      "alert_source": "Prometheus",
+      "symptoms": "BGP Session Down on Spine 01",
+      "affected_entities": ["10.116.1.102"],
+      "diagnostic_logs": [
+        "Analytics Agent: Alert validated. Created Jira ticket KAN-42.",
+        "Senior Network Engineer: Ran BGP show command. Found neighbor Idle."
+      ],
+      "current_assignee": "senior-network-engineer-agent",
+      "rca_summary": "",
+      "jira_issue_key": "KAN-42",
+      "loop_count": 2,
+      "messages": []
+    }
+    ```
+*   **Dynamic Routing Directory (`agent:url:<agent_name>`)**: When agents are deployed to GreenNode, their dynamic endpoints are registered in Redis (e.g., `agent:url:senior-network-engineer-agent` -> `https://endpoint-xyz.agentbase-runtime.aiplatform.vngcloud.vn`). This allows the Supervisor to route calls dynamically without hardcoded URLs.
+*   **Slack Context Mapping (`slack_ctx:<session_id>`)**: Maps incoming Slack webhooks to their active sessions, storing `channel_id` and `thread_ts` so that callbacks can post status replies to the exact thread.
+
+---
+
+## Internal RAG Knowledge Base (Vector Search)
+
+The team's internal RAG (Retrieval-Augmented Generation) engine is integrated into the system via the `query_knowledge_base` MCP tool. It allows network engineer agents to query reference books and troubleshooting documentation.
+
+### 1. Document Database Structure & Compliance Standards
+The vector database contains **16,520 document chunks** classified into three main compliance and documentation pillars:
+
+*   **ISO 27001 Security & Tenant Isolation Standards (`source: "iso"`)**:
+    *   Regulations governing tenant isolation layers and private network segmentation guidelines.
+    *   Security standards regarding data leakage prevention, secure credentials rotation, and calling tenant authorization verification procedures.
+*   **ITSM / ITIL Operational SOPs & Procedures (`source: "itsm"`)**:
+    *   SOPs defining SLA response guidelines, incident prioritization metrics (P1 to P4), and Level 3 escalation protocols.
+    *   ITSM policies on Change Advisory Board (CAB) reviews, block kit confirmations, and verification confirmations for configuration modifications.
+*   **Vendor Recommendations & Technical Manuals (`source: "kb"`, `source: "book"`)**:
+    *   *Juniper Knowledge Base (KB) Articles*: Over 10,000+ support articles defining stable software version guidelines (e.g., KB21476), transceivers diagnostics, and standard troubleshooting workflows.
+    *   *Reference Books & Technical Design Manuals*: Over 6,100+ pages of textbooks on EVPN-VXLAN design, QFX series next-generation data centers routing topologies, class of service (CoS), and Junos security policies.
+
+### 2. Search Mechanism
+When an agent invokes `query_knowledge_base(query, source_type)`, the MCP Server performs a **Vector Similarity Search** over the vector store. It formats the text chunks alongside similarity scores, page numbers, and reference URLs, giving the diagnosing agent reference information to generate precise configuration set statements.
 
 ---
 
@@ -84,6 +182,8 @@ claw-a-thon-thinhlv-agent/
 ├── README.md                              # This file
 ├── docker-compose.yml                     # Runs MCP server & monitoring locally
 ├── deploy_all.sh                          # Automatically builds, pushes, and deploys all 4 agents to GreenNode
+├── deploy_senior.sh                       # Rebuilds, deploys, and registers the Senior Agent
+├── deploy_supervisor.sh                   # Rebuilds, deploys, and registers the Supervisor Agent
 │
 ├── shared/                                # Shared modules and configurations
 │   ├── devices.json                       # Single source of truth for datacenter device inventory
@@ -103,19 +203,19 @@ claw-a-thon-thinhlv-agent/
 │   └── Dockerfile
 │
 ├── analytics-network-engineer-agent/      # 🔍 Alert Triager & Jira Ticket Creator
-│   ├── main.py                            # Agent loop
+│   ├── main.py                            # Agent loop with fallback-safe message parser
 │   ├── system_prompt.py                   # Triage prompt
 │   ├── agent_tools.py                     # Custom tools for alert analysis
 │   └── Dockerfile
 │
 ├── senior-network-engineer-agent/          # ⚙️ Deep Diagnostic & Config Proposer
-│   ├── main.py                            # Agent loop
+│   ├── main.py                            # Agent loop with fallback-safe message parser
 │   ├── system_prompt.py                   # Senior engineer guidelines + pre-flight checklist
 │   ├── agent_tools.py                     # Wrapper for Netmiko/NETCONF tools
 │   └── Dockerfile
 │
 ├── customer-advisory-agent/               # 📝 L3 Customer Advisory & RCA Creator
-│   ├── main.py                            # Agent loop
+│   ├── main.py                            # Agent loop with fallback-safe message parser
 │   ├── system_prompt.py                   # RCA reporting & closing guidelines
 │   ├── agent_tools.py                     # Customer communication & notify tools
 │   └── Dockerfile
@@ -125,8 +225,24 @@ claw-a-thon-thinhlv-agent/
 │   ├── requirements.txt                   # MCP server dependencies
 │   └── Dockerfile
 │
+├── automation-device-discovery/            # 🌐 Automated Device Discovery & LLDP Topology Tools
+│   ├── discovery.py                       # SSH scan to auto-discover Linux/Juniper devices
+│   ├── collect_topology_data.py           # Polls devices for LLDP, BGP, and bundle metrics
+│   ├── parse_topology.py                  # Parses raw output into topological metrics
+│   ├── export_topology_final.py           # Exports final topology JSON and markdown reports
+│   └── configure_lldp.py                  # Sets up LLDP configurations across network nodes
+│
 └── greennode-agentbase-skills/            # 🛠️ Platform Deployment Skills
 ```
+
+---
+
+## Robust Agent Trace Message Parsing
+
+To prevent intermediate tool invocations or structured output generation from producing empty response content, all worker agents (Analytics, Senior, Customer Advisory) employ a **fallback-safe execution trace parser**:
+*   Instead of blindly retrieving `result["messages"][-1].content`, the agents traverse backward through the message history.
+*   They find the latest `AIMessage` containing non-empty content and return it as the agent's output.
+*   This significantly increases system resilience, ensuring that intermediate tool metadata is ignored in favor of the actual diagnostic findings.
 
 ---
 
@@ -148,20 +264,22 @@ curl http://localhost:8980/sse
 
 ### 2. Deploy the Hierarchical Agent NOC
 
-We provide a deployment script to build, push, deploy, and register all 4 agents in one command:
+We provide deployment scripts to build, push, deploy, and register agents:
 
-```bash
-# 1. Ensure GreenNode credentials are in .greennode.json at the root of the project
-# 2. Configure .env file for each agent (or copy from examples)
-# 3. Deploy all 4 agents to GreenNode Cloud Platform:
-./deploy_all.sh
-```
+*   **Deploy all 4 agents in one command:**
+    ```bash
+    ./deploy_all.sh
+    ```
+*   **Deploy and register only the Senior Agent:**
+    ```bash
+    ./deploy_senior.sh
+    ```
+*   **Deploy and register only the Supervisor Agent:**
+    ```bash
+    ./deploy_supervisor.sh
+    ```
 
-The `deploy_all.sh` script will:
-*   Build Docker images for `supervisor-network-engineer-agent`, `analytics-network-engineer-agent`, `senior-network-engineer-agent`, and `customer-advisory-agent`.
-*   Push images to your VNG Cloud Container Registry.
-*   Deploy them as GreenNode AgentBase runtimes.
-*   Query the dynamic endpoint URLs and register them in Redis.
+Ensure GreenNode credentials are in `.greennode.json` at the root of the project and environment variables are set inside the respective `.env` files for each agent runtime before deploying.
 
 ---
 
@@ -243,7 +361,7 @@ To enforce Segregation of Duties and maintain strict confidentiality between cli
 
 ## Slack & Web-Reading Tools
 
-The worker agents are equipped with Slack utility and web-reading tools to leverage their newly granted workspace scopes:
+The worker agents are equipped with Slack utility and web-reading tools to leverage their workspace scopes:
 
 *   `slack_view_profile(user_id)`: Retrieve detailed profile info of a Slack member (name, email, timezone, status).
 *   `slack_react_message(channel_id, message_ts, emoji_name)`: React with an emoji (e.g. `thumbsup`, `white_check_mark`) to Slack messages.
@@ -262,7 +380,6 @@ The worker agents are equipped with Slack utility and web-reading tools to lever
     *   **Mandatory Parameter**: The `query_netbox_inventory` tool requires a `calling_tenant` slug parameter (e.g. `'customer-a'`, `'customer-b'`, or `'noc-ops'`).
     *   **SQL Filter**: The MCP server automatically scopes queries to the `calling_tenant` (unless it is `'noc-ops'`), filtering out other customer environments.
     *   **Prompt Enforcements**: System prompts strictly forbid worker agents from diagnosing, executing router commands, or mentioning details of other customer environments if they are queried about an unauthorized IP. Any cross-tenant query immediately halts diagnostics and returns a safe "not found/unauthorized" response.
-
 
 ---
 
@@ -308,7 +425,3 @@ Run the simulation script:
 mcp-env/bin/python scratch/simulate_ddos_flow.py
 ```
 This script initializes the Redis session state and triggers the orchestrator loop, logging diagnostic logs in real-time until completion.
-
-
-
-

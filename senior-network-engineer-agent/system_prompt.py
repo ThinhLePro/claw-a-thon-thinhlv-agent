@@ -118,4 +118,7 @@ For EVERY single turn, you MUST strictly follow this exact format. Output NOTHIN
 **Analysis:** [Analyze the current state, recent logs, tool outputs, or errors]
 **Plan:** [State concisely what you are going to do next and why]
 **Action:** [Call the appropriate tool with exact parameters]
+
+If you have completed all diagnostics and actions, and are ready to provide the final response, use the following format instead of the Action block:
+**Final Answer:** [Detailed final diagnostics summary, proposed changes, and rollback plan]
 """

@@ -235,7 +235,7 @@ def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str 
     state["loop_count"] += 1
     
     # 1. Enforce Fallback Limit
-    if state["loop_count"] > 5 and state.get("current_assignee") not in ["customer-advisory-agent", "FINISH"]:
+    if state["loop_count"] > 5 and state.get("current_assignee") not in ["customer-advisory-agent", "FINISH", "PAUSED"]:
         logger.warning(f"Loop limit exceeded ({state['loop_count']}) for session {session_id}. Forcing escalation.")
         state["diagnostic_logs"].append("Supervisor: Max loop count exceeded. Escalating to Level 3.")
         state["current_assignee"] = "customer-advisory-agent"
@@ -291,6 +291,44 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
                 # The LLM routing decision is preserved (next_agent stays as decided by the router)
                 state["diagnostic_logs"].append("P1 CRITICAL: Slack alarm sent to L3 Human Engineers. Full pipeline continues.")
             
+        # Check if worker is waiting for L3 human feedback
+        is_waiting_for_l3 = False
+        logs = state.get("diagnostic_logs", [])
+        if logs and next_agent == "senior-network-engineer-agent":
+            last_senior_log = None
+            for log in reversed(logs):
+                if "Senior Network Engineer diagnostics completed:" in log or "Senior Network Engineer failed" in log:
+                    last_senior_log = log
+                    break
+            
+            if last_senior_log:
+                waiting_keywords = [
+                    "waiting for l3", 
+                    "waiting state", 
+                    "pending cab approval", 
+                    "propose_network_change",
+                    "change request created"
+                ]
+                if any(kw in last_senior_log.lower() for kw in waiting_keywords):
+                    # Check if there is any L3 feedback since then
+                    has_l3_feedback_since = False
+                    for log in reversed(logs):
+                        if log == last_senior_log:
+                            break
+                        log_lower = log.lower()
+                        if "l3 human feedback" in log_lower or "rework requested" in log_lower or "feedback" in log_lower or "approved" in log_lower:
+                            has_l3_feedback_since = True
+                            break
+                    
+                    if not has_l3_feedback_since:
+                        is_waiting_for_l3 = True
+
+        if is_waiting_for_l3:
+            logger.info("Senior Network Engineer is waiting for L3 approval/feedback. Pausing supervisor loop.")
+            next_agent = "PAUSED"
+            reasoning = "Senior Network Engineer is awaiting L3 Human approval/feedback."
+            res_json["response"] = "The mitigation proposal has been created and is pending CAB approval from L3 Human Network Engineers on Slack. Once approved, the configuration will be automatically applied."
+
         state["diagnostic_logs"].append(f"Supervisor decision: Route to {next_agent} (Intent: {intent}, Priority: {priority}). Reason: {reasoning}")
         state["current_assignee"] = next_agent
         
@@ -411,6 +449,9 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
         # Trigger the worker agent dynamically
         worker_url = StateManager.get_agent_url(next_agent)
         if not worker_url:
+            if next_agent == "PAUSED":
+                ai_response = safe_get(res_json, "response", "")
+                return ai_response or "The mitigation proposal has been created and is pending CAB approval from L3 Human Network Engineers on Slack. Once approved, the configuration will be automatically applied."
             logger.error(f"Endpoint for agent {next_agent} not found in Redis.")
             return f"System error: Service endpoint for {next_agent} not found."
             
@@ -555,7 +596,7 @@ def handler(payload: dict, context: RequestContext) -> dict:
             state["diagnostic_logs"].append(f"REWORK REQUESTED BY L3 — Re-routing to Senior Network Engineer for adjustments.")
             state["current_assignee"] = "senior-network-engineer-agent"
             # Reset loop count to allow the agent to process the rework
-            state["loop_count"] = max(0, state.get("loop_count", 0) - 1)
+            state["loop_count"] = 0
             StateManager.save_state(session_id_rw, state)
             
             # Re-trigger supervisor loop which will route to senior-network-engineer-agent

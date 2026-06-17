@@ -138,7 +138,15 @@ Triage logs so far:
             {"messages": [{"role": "user", "content": agent_input}]}
         )
         
-        agent_output = result["messages"][-1].content
+        # Search backwards for the last non-empty AIMessage content
+        agent_output = ""
+        for msg in reversed(result["messages"]):
+            if msg.type == "ai" and msg.content.strip():
+                agent_output = msg.content
+                break
+        if not agent_output and result["messages"]:
+            agent_output = result["messages"][-1].content
+            
         logger.info(f"Senior Network Engineer output: {agent_output}")
         
         # Reload state in case it changed via tools
