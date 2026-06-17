@@ -1,313 +1,73 @@
 {
   "devices": {
-    "LAB_STL.GW.01": {
-      "name": "LAB_STL.GW.01",
-      "ip": "10.116.0.20",
-      "port": 830,
-      "model": "vmx",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
-      "status": "Online"
-    },
-    "LAB-EX4400-TOR": {
-      "name": "LAB-EX4400-TOR",
+    "LAB-LEAF-01": {
+      "name": "LAB-LEAF-01",
       "ip": "10.116.0.158",
       "port": 830,
-      "model": "ex4400-48t",
-      "vendor": "juniper",
+      "model": "QFX Series (Atom C3558)",
+      "vendor": "Juniper Networks",
       "connection_method": "netconf",
-      "role": "ToR Switch",
-      "status": "Online"
-    },
-    "LAB_STL.GW.02": {
-      "name": "LAB_STL.GW.02",
-      "ip": "10.116.0.21",
-      "port": 830,
-      "model": "vmx",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
-      "status": "Online"
-    },
-    "LAB_LEAF.01": {
-      "name": "LAB_LEAF.01",
-      "ip": "10.116.0.26",
-      "port": 830,
-      "model": "vqfx-10000",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Leaf Switch",
-      "status": "Online"
-    },
-    "LAB_SERVICE.02": {
-      "name": "LAB_SERVICE.02",
-      "ip": "10.116.0.25",
-      "port": 830,
-      "model": "vqfx-10000",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Service Switch",
-      "status": "Online"
-    },
-    "LAB_LEAF.02": {
-      "name": "LAB_LEAF.02",
-      "ip": "10.116.0.27",
-      "port": 830,
-      "model": "vqfx-10000",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Leaf Switch",
-      "status": "Online"
-    },
-    "LAB_SERVICE.01": {
-      "name": "LAB_SERVICE.01",
-      "ip": "10.116.0.24",
-      "port": 830,
-      "model": "vqfx-10000",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Service Switch",
-      "status": "Online"
-    },
-    "LAB-VCEX4600-TOR-2": {
-      "name": "LAB-VCEX4600-TOR-2",
-      "ip": "10.116.0.11",
-      "port": 830,
-      "model": "ex4600-40f",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "ToR Switch",
-      "status": "Online"
-    },
-    "LAB_INTER.01": {
-      "name": "LAB_INTER.01",
-      "ip": "10.116.0.22",
-      "port": 830,
-      "model": "vqfx-10000",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Interconnect Switch",
-      "status": "Online"
-    },
-    "LAB_INTER.02": {
-      "name": "LAB_INTER.02",
-      "ip": "10.116.0.23",
-      "port": 830,
-      "model": "vqfx-10000",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Interconnect Switch",
-      "status": "Online"
-    },
-    "LAB_SPINE.01": {
-      "name": "LAB_SPINE.01",
-      "ip": "10.116.0.28",
-      "port": 22,
-      "model": "vqfx-10000",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Spine Switch",
-      "status": "Online"
-    },
-    "LAB_SUPER_SPINE.02": {
-      "name": "LAB_SUPER_SPINE.02",
-      "ip": "10.116.0.31",
-      "port": 22,
-      "model": "vqfx-10000",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Super Spine Switch",
-      "status": "Online"
-    },
-    "LAB_SPINE.02": {
-      "name": "LAB_SPINE.02",
-      "ip": "10.116.0.29",
-      "port": 22,
-      "model": "vqfx-10000",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Spine Switch",
-      "status": "Online"
-    },
-    "LAB_STL.GW.02_2": {
-      "name": "LAB_STL.GW.02_2",
-      "ip": "10.116.0.38",
-      "port": 830,
-      "model": "vmx",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
-      "status": "Online"
-    },
-    "LAB-SRX-STF-GW-N1": {
-      "name": "LAB-SRX-STF-GW-N1",
-      "ip": "10.116.0.34",
-      "port": 22,
-      "model": "vSRX",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
-      "status": "Online"
-    },
-    "LAB_STL.GW.01_2": {
-      "name": "LAB_STL.GW.01_2",
-      "ip": "10.116.0.37",
-      "port": 830,
-      "model": "vmx",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
-      "status": "Online"
-    },
-    "LAB_INTERNET.02": {
-      "name": "LAB_INTERNET.02",
-      "ip": "10.116.0.33",
-      "port": 830,
-      "model": "vmx",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
-      "status": "Online"
-    },
-    "LAB_INTERNET.01": {
-      "name": "LAB_INTERNET.01",
-      "ip": "10.116.0.32",
-      "port": 830,
-      "model": "vmx",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
-      "status": "Online"
-    },
-    "LAB_SUPER_SPINE.01": {
-      "name": "LAB_SUPER_SPINE.01",
-      "ip": "10.116.0.30",
-      "port": 22,
-      "model": "vqfx-10000",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Super Spine Switch",
-      "status": "Online"
-    },
-    "LAB-INTERNET-GATEWAY-01": {
-      "name": "LAB-INTERNET-GATEWAY-01",
-      "ip": "10.116.0.54",
-      "port": 830,
-      "model": "mx240",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
-      "status": "Online"
-    },
-    "LAB-QFX10K8-GW-01": {
-      "name": "LAB-QFX10K8-GW-01",
-      "ip": "10.116.0.64",
-      "port": 830,
-      "model": "qfx10008",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
+      "role": "Leaf",
       "status": "Online"
     },
     "LAB_2BW14.30_QFX5210-64C_SPN.01": {
       "name": "LAB_2BW14.30_QFX5210-64C_SPN.01",
       "ip": "10.116.1.102",
       "port": 830,
-      "model": "qfx5210-64c",
-      "vendor": "juniper",
+      "model": "QFX5210-64C",
+      "vendor": "Juniper Networks",
       "connection_method": "netconf",
-      "role": "Spine Switch",
-      "status": "Online"
-    },
-    "LAB-SRX-STF-GW-N1_2": {
-      "name": "LAB-SRX-STF-GW-N1_2",
-      "ip": "10.116.0.36",
-      "port": 22,
-      "model": "vSRX",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
+      "role": "Spine",
       "status": "Online"
     },
     "LAB_2BW14.27_QFX5210-64C_SPN.02": {
       "name": "LAB_2BW14.27_QFX5210-64C_SPN.02",
       "ip": "10.116.1.103",
       "port": 830,
-      "model": "qfx5210-64c",
-      "vendor": "juniper",
+      "model": "QFX5210-64C",
+      "vendor": "Juniper Networks",
       "connection_method": "netconf",
-      "role": "Spine Switch",
-      "status": "Online"
-    },
-    "LAB_2BW11.3_QFX5120-48Y_STL.GW.04": {
-      "name": "LAB_2BW11.3_QFX5120-48Y_STL.GW.04",
-      "ip": "10.116.1.151",
-      "port": 22,
-      "model": "qfx5120-48y-8c",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
-      "status": "Online"
-    },
-    "LAB_2BW11.18_SRX1500.STF.GW-N0": {
-      "name": "LAB_2BW11.18_SRX1500.STF.GW-N0",
-      "ip": "10.116.0.96",
-      "port": 22,
-      "model": "srx1500",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
-      "status": "Online"
-    },
-    "LAB_2BW11.9_QFX5120-48Y_STL.GW.03": {
-      "name": "LAB_2BW11.9_QFX5120-48Y_STL.GW.03",
-      "ip": "10.116.1.150",
-      "port": 22,
-      "model": "qfx5120-48y-8c",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Gateway Router",
+      "role": "Spine",
       "status": "Online"
     },
     "LAB_2BW11.11_QFX5120-32C_STL.GW.01": {
       "name": "LAB_2BW11.11_QFX5120-32C_STL.GW.01",
       "ip": "10.116.1.98",
       "port": 22,
-      "model": "qfx5120-32c",
-      "vendor": "juniper",
+      "model": "QFX5120-32C",
+      "vendor": "Juniper Networks",
       "connection_method": "netconf",
-      "role": "Gateway Router",
+      "role": "Gateway",
       "status": "Online"
     },
     "LAB_2BW11.12_QFX5120-32C_STL.GW.02": {
       "name": "LAB_2BW11.12_QFX5120-32C_STL.GW.02",
       "ip": "10.116.1.99",
       "port": 830,
-      "model": "qfx5120-32c",
-      "vendor": "juniper",
+      "model": "QFX5120-32C",
+      "vendor": "Juniper Networks",
       "connection_method": "netconf",
-      "role": "Gateway Router",
+      "role": "Gateway",
+      "status": "Online"
+    },
+    "LAB-INTERNET-GATEWAY-01": {
+      "name": "LAB-INTERNET-GATEWAY-01",
+      "ip": "10.116.0.54",
+      "port": 830,
+      "model": "QFX Series (Atom C3558)",
+      "vendor": "Juniper Networks",
+      "connection_method": "netconf",
+      "role": "Internet GW",
       "status": "Online"
     },
     "noc-portal-app": {
       "name": "noc-portal-app",
       "ip": "10.116.0.176",
-      "port": 8822,
+      "port": 9922,
       "model": "Standard PC (i440FX + PIIX, 1996)",
       "vendor": "ubuntu",
       "connection_method": "ssh",
       "role": "Server",
-      "status": "Online"
-    },
-    "2BW11.36_EX4300_LAB": {
-      "name": "2BW11.36_EX4300_LAB",
-      "ip": "10.116.0.13",
-      "port": 830,
-      "model": "ex4300-48t",
-      "vendor": "juniper",
-      "connection_method": "netconf",
-      "role": "Switch",
       "status": "Online"
     },
     "net-monitor": {

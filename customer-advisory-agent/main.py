@@ -43,6 +43,8 @@ llm = ChatOpenAI(
 )
 
 # --- Redis Config ---
+# NOTE: Connect via internal LAN IP '10.116.0.181' for local/on-premise hosts (e.g. MCP Server).
+# Connect via public NAT IP '49.213.77.222' for cloud-deployed Greennode agents.
 REDIS_HOST = os.environ.get("REDIS_HOST", "49.213.77.222")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", None)
@@ -122,8 +124,10 @@ def run_advisory_work(session_id: str):
         elif "customer-001" in user_id.lower():
             calling_tenant = "customer-001"
 
+    user_profile = state.get("user_profile", {})
     agent_input = f"""Incident Symptoms: {state['symptoms']}
 Reporting User: {user_id}
+User Profile: {json.dumps(user_profile, ensure_ascii=False)}
 Calling Tenant (slug): {calling_tenant}
 JIRA Ticket: {state.get('jira_issue_key', 'None')}
 RCA Summary so far: {state.get('rca_summary', '')}

@@ -41,6 +41,8 @@ def send_slack_message(channel_id, text, blocks=None):
         logger.warning("Slack app is not initialized. Cannot send message.")
         return
     try:
+        if text:
+            text = text.replace("**", "*")
         if blocks:
             app.client.chat_postMessage(channel=channel_id, text=text, blocks=blocks)
         else:
@@ -208,6 +210,8 @@ if app:
         
         try:
             response = _process_message_fn(enriched_message, user_id, session_id)
+            if response:
+                response = response.replace("**", "*")
             say(text=response, thread_ts=thread_ts)
         except Exception as e:
             logger.error(f"Error processing Slack message: {e}", exc_info=True)

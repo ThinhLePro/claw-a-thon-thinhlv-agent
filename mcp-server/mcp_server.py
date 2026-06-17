@@ -35,6 +35,8 @@ JIRA_PROJECT_KEY = os.environ.get("JIRA_PROJECT_KEY", "KAN")
 JIRA_WEBHOOK_SECRET = os.environ.get("JIRA_WEBHOOK_SECRET", "")
 
 # Redis configuration (for session log inspector)
+# NOTE: Connect via internal LAN IP '10.116.0.181' for local/on-premise hosts (e.g. MCP Server).
+# Connect via public NAT IP '49.213.77.222' for cloud-deployed Greennode agents.
 REDIS_HOST = os.environ.get("REDIS_HOST", "10.116.0.181")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", None)
@@ -160,18 +162,46 @@ def connect_device(device_name: str) -> Device:
             "cisco": "cisco_ios",
             "arista": "arista_eos",
             "huawei": "huawei",
+            "ubuntu": "linux",
         }
         device_type = vendor_netmiko_map.get(vendor, f"{vendor}_ssh")
 
-        net_connect = ConnectHandler(
-            device_type=device_type,
-            host=ip,
-            username=NETCONF_USER,
-            password=NETCONF_PASSWORD,
-            port=port,
-            timeout=15,
-        )
-        return net_connect
+        # Fallback credentials list
+        creds_to_try = []
+        if NETCONF_USER and NETCONF_PASSWORD:
+            creds_to_try.append((NETCONF_USER, NETCONF_PASSWORD))
+        if vendor == "ubuntu" or device_type == "linux":
+            for fallback_user, fallback_pass in [("root", "vnd@123#"), ("thinhle", "thinhle@123#")]:
+                if (fallback_user, fallback_pass) not in creds_to_try:
+                    creds_to_try.append((fallback_user, fallback_pass))
+
+        # Fallback ports list
+        ports_to_try = [port]
+        if vendor == "ubuntu" or device_type == "linux":
+            for fallback_port in [22, 8822, 9922]:
+                if fallback_port not in ports_to_try:
+                    ports_to_try.append(fallback_port)
+
+        last_err = None
+        for current_port in ports_to_try:
+            for username, password in creds_to_try:
+                logger.info(f"Attempting SSH connection to {resolved_name} ({ip}:{current_port}) with user '{username}'...")
+                try:
+                    net_connect = ConnectHandler(
+                        device_type=device_type,
+                        host=ip,
+                        username=username,
+                        password=password,
+                        port=current_port,
+                        timeout=15,
+                    )
+                    logger.info(f"Successfully connected to SSH device {resolved_name} ({ip}:{current_port}) using user '{username}'!")
+                    return net_connect
+                except Exception as e:
+                    logger.warning(f"Failed SSH connection to {resolved_name} ({ip}:{current_port}) using user '{username}': {e}")
+                    last_err = e
+
+        raise ConnectionError(f"All SSH connection attempts failed for {resolved_name}. Last error: {last_err}")
     elif connection_method == "api":
         raise NotImplementedError(
             f"API connection method is not yet implemented for {resolved_name}. "
@@ -227,23 +257,48 @@ def execute_command_on_device(device_name: str, command: str, timeout: int = Non
             "cisco": "cisco_ios",
             "arista": "arista_eos",
             "huawei": "huawei",
+            "ubuntu": "linux",
         }
         device_type = vendor_netmiko_map.get(vendor, f"{vendor}_ssh")
 
-        try:
-            net_connect = ConnectHandler(
-                device_type=device_type,
-                host=device_info_full["ip"],
-                username=NETCONF_USER,
-                password=NETCONF_PASSWORD,
-                port=device_info_full["port"],
-                timeout=timeout,
-            )
-            output = net_connect.send_command(command, read_timeout=timeout)
-            net_connect.disconnect()
-            return output or f"No output returned by command '{command}' on {device_name}."
-        except Exception as e:
-            return f"Error executing SSH command '{command}' on '{device_name}': {e}"
+        # Fallback credentials list
+        creds_to_try = []
+        if NETCONF_USER and NETCONF_PASSWORD:
+            creds_to_try.append((NETCONF_USER, NETCONF_PASSWORD))
+        if vendor == "ubuntu" or device_type == "linux":
+            for fallback_user, fallback_pass in [("root", "vnd@123#"), ("thinhle", "thinhle@123#")]:
+                if (fallback_user, fallback_pass) not in creds_to_try:
+                    creds_to_try.append((fallback_user, fallback_pass))
+
+        # Fallback ports list
+        ports_to_try = [device_info_full["port"]]
+        if vendor == "ubuntu" or device_type == "linux":
+            for fallback_port in [22, 8822, 9922]:
+                if fallback_port not in ports_to_try:
+                    ports_to_try.append(fallback_port)
+
+        last_err = None
+        for current_port in ports_to_try:
+            for username, password in creds_to_try:
+                logger.info(f"Attempting SSH connection (command exec) to {device_name} ({device_info_full['ip']}:{current_port}) with user '{username}'...")
+                try:
+                    net_connect = ConnectHandler(
+                        device_type=device_type,
+                        host=device_info_full["ip"],
+                        username=username,
+                        password=password,
+                        port=current_port,
+                        timeout=timeout or 15,
+                    )
+                    logger.info(f"Successfully connected to SSH device {device_name} ({device_info_full['ip']}:{current_port}) using user '{username}' (command exec)!")
+                    output = net_connect.send_command(command, read_timeout=timeout)
+                    net_connect.disconnect()
+                    return output or f"No output returned by command '{command}' on {device_name}."
+                except Exception as e:
+                    logger.warning(f"Failed SSH connection attempt (command exec) to {device_name} ({device_info_full['ip']}:{current_port}) with user '{username}': {e}")
+                    last_err = e
+
+        return f"Error executing SSH command '{command}' on '{device_name}': All connection attempts failed. Last error: {last_err}"
 
     elif connection_method == "api":
         return f"API connection method is not yet implemented for device '{device_name}'."
@@ -281,7 +336,13 @@ class DeviceConnectionPool:
             if resolved_name in self._pool:
                 dev, _ = self._pool[resolved_name]
                 try:
-                    if dev.connected:
+                    is_connected = False
+                    if hasattr(dev, "connected"):
+                        is_connected = dev.connected
+                    elif hasattr(dev, "is_alive"):
+                        is_connected = dev.is_alive()
+                    
+                    if is_connected:
                         logger.info(f"Reusing existing connection to {resolved_name} from pool.")
                         self._pool[resolved_name] = (dev, time.time())
                         return dev
@@ -289,7 +350,10 @@ class DeviceConnectionPool:
                     pass
                 logger.info(f"Connection for {resolved_name} is stale/disconnected. Reconnecting...")
                 try:
-                    dev.close()
+                    if hasattr(dev, "close"):
+                        dev.close()
+                    elif hasattr(dev, "disconnect"):
+                        dev.disconnect()
                 except Exception:
                     pass
                 del self._pool[resolved_name]
@@ -317,7 +381,10 @@ class DeviceConnectionPool:
                 if name not in active_names:
                     logger.info(f"Closing pooled connection for removed/unregistered device {name}")
                     try:
-                        dev.close()
+                        if hasattr(dev, "close"):
+                            dev.close()
+                        elif hasattr(dev, "disconnect"):
+                            dev.disconnect()
                     except Exception as e:
                         logger.warning(f"Error closing connection for {name}: {e}")
                     to_remove.append(name)
@@ -338,7 +405,10 @@ class DeviceConnectionPool:
                     logger.info(f"TTL expired for connection to {name}. Closing connection.")
                     dev, _ = self._pool.pop(name)
                     try:
-                        dev.close()
+                        if hasattr(dev, "close"):
+                            dev.close()
+                        elif hasattr(dev, "disconnect"):
+                            dev.disconnect()
                     except Exception as e:
                         logger.warning(f"Error closing expired connection for {name}: {e}")
 
@@ -1154,65 +1224,312 @@ def get_device_hardware(device_name: str) -> str:
 
 @mcp.tool()
 def get_network_topology() -> str:
-    """Discover the network topology by querying LLDP neighbors on all active devices.
+    """Discover the network topology by querying LLDP neighbors, logical AE bundles, and BGP summaries on all active devices.
 
     Returns:
-        A formatted topology connection list/graph showing connected switch ports.
+        A formatted topology Markdown report including a Mermaid graph and detailed connection summaries.
     """
     logger.info("Executing tool: get_network_topology")
-    topology_links = []
-    errors = []
+    import re
+    import concurrent.futures
+    import json
+    
+    def parse_juniper_lldp(raw_lldp):
+        connections = []
+        if not raw_lldp:
+            return connections
+        lines = raw_lldp.splitlines()
+        for line in lines:
+            if "Local Interface" in line or "---" in line or not line.strip():
+                continue
+            parts = line.split()
+            if len(parts) >= 3:
+                connections.append({
+                    "local_interface": parts[0],
+                    "parent_bundle": parts[1] if (len(parts) >= 4 and parts[1] != "-") else None,
+                    "remote_port": parts[3] if len(parts) >= 5 else parts[-1],
+                    "remote_hostname": parts[-1]
+                })
+        return connections
 
-    for name, info in DEVICE_MAP.items():
+    def parse_juniper_bgp(raw_bgp):
+        peers = []
+        if not raw_bgp:
+            return peers
+        blocks = re.split(r"Peer: ", raw_bgp)
+        for block in blocks[1:]:
+            lines = block.splitlines()
+            if not lines:
+                continue
+            first_line = lines[0]
+            peer_match = re.search(r"^([a-f\d\.\:\+]+)\s+AS\s+([\d\.]+)\s+Local:\s+([a-f\d\.\:\+a-z]+)\s+AS\s+([\d\.]+)", first_line)
+            if peer_match:
+                peer_ip = peer_match.group(1).split("+")[0]
+                peer_as = peer_match.group(2)
+                
+                desc = "N/A"
+                state = "Unknown"
+                for line in lines:
+                    if "Description:" in line:
+                        desc = line.split("Description:")[1].strip()
+                    if "State:" in line:
+                        state = line.split("State:")[1].split()[0].strip()
+                
+                peers.append({
+                    "remote_ip": peer_ip,
+                    "remote_as": peer_as,
+                    "description": desc,
+                    "state": state
+                })
+        return peers
+
+    def parse_juniper_bundles(raw_terse):
+        bundles = {}
+        if not raw_terse:
+            return bundles
+        for line in raw_terse.splitlines():
+            if "aenet    -->" in line:
+                parts = line.split()
+                if len(parts) >= 3:
+                    phys = parts[0].split(".")[0]
+                    bundle = parts[-1].split(".")[0]
+                    if bundle not in bundles:
+                        bundles[bundle] = []
+                    if phys not in bundles[bundle]:
+                        bundles[bundle].append(phys)
+        return bundles
+
+    def parse_ubuntu_lldp(raw_lldp_dict):
+        connections = []
+        for iface, output in raw_lldp_dict.items():
+            if "sysName" in output:
+                match = re.search(r"sysName\s+(.*)", output)
+                if match:
+                    remote_sys = match.group(1).strip()
+                    connections.append({"local_int": iface, "remote_sys": remote_sys})
+        return connections
+
+    def collect_device_data(name, info):
+        ip = info["ip"]
+        port = info["port"]
+        vendor = info.get("vendor", "juniper")
+        connection_method = info.get("connection_method", "netconf")
+        
+        node_data = {
+            "hostname": name,
+            "management_ip": ip,
+            "device_type": "Juniper" if connection_method == "netconf" else "Ubuntu",
+            "model": info.get("model", "Unknown"),
+            "os_version": "Unknown",
+            "physical_links": [],
+            "logical_bundles": [],
+            "bgp_sessions": []
+        }
+        
         try:
-            logger.info(f"Topology query: connecting to {name}...")
-            dev = pool.get(name)
-            lldp_xml = dev.rpc.get_lldp_neighbors_information()
-            neighbors = lldp_xml.findall('.//lldp-neighbor-information')
-
-            for n in neighbors:
-                local_port = n.findtext('lldp-local-port-id') or n.findtext('lldp-local-interface')
-                remote_sys = n.findtext('lldp-remote-system-name')
-                remote_port = n.findtext('lldp-remote-port-id') or n.findtext('lldp-remote-interface')
-
-                if remote_sys:
-                    topology_links.append({
-                        "source": name,
-                        "source_port": local_port,
-                        "target": remote_sys,
-                        "target_port": remote_port
-                    })
+            if connection_method == "netconf":
+                dev = pool.get(name)
+                
+                # OS Version
+                try:
+                    node_data["os_version"] = dev.facts.get("version", "Unknown")
+                except Exception:
+                    pass
+                
+                # LLDP
+                try:
+                    res_lldp = dev.rpc.cli("show lldp neighbors", format="text")
+                    raw_lldp = ""
+                    if hasattr(res_lldp, "text") and res_lldp.text:
+                        raw_lldp = res_lldp.text
+                    elif hasattr(res_lldp, "findtext"):
+                        raw_lldp = res_lldp.findtext('cli-out') or res_lldp.findtext('output') or ""
+                    
+                    node_data["physical_links"] = parse_juniper_lldp(raw_lldp)
+                except Exception as e:
+                    logger.warning(f"Failed to get LLDP for Juniper {name}: {e}")
+                    
+                # BGP Sessions
+                try:
+                    res_bgp = dev.rpc.cli("show bgp neighbor", format="text")
+                    raw_bgp = ""
+                    if hasattr(res_bgp, "text") and res_bgp.text:
+                        raw_bgp = res_bgp.text
+                    elif hasattr(res_bgp, "findtext"):
+                        raw_bgp = res_bgp.findtext('cli-out') or res_bgp.findtext('output') or ""
+                    
+                    node_data["bgp_sessions"] = parse_juniper_bgp(raw_bgp)
+                except Exception as e:
+                    logger.warning(f"Failed to get BGP for Juniper {name}: {e}")
+                    
+                # Bundles
+                try:
+                    res_terse = dev.rpc.cli("show interfaces terse", format="text")
+                    raw_terse = ""
+                    if hasattr(res_terse, "text") and res_terse.text:
+                        raw_terse = res_terse.text
+                    elif hasattr(res_terse, "findtext"):
+                        raw_terse = res_terse.findtext('cli-out') or res_terse.findtext('output') or ""
+                    
+                    bundles_map = parse_juniper_bundles(raw_terse)
+                    for ae, members in bundles_map.items():
+                        node_data["logical_bundles"].append({"name": ae, "members": members})
+                except Exception as e:
+                    logger.warning(f"Failed to get logical bundles for Juniper {name}: {e}")
+                    
+            elif connection_method == "ssh":
+                # Ubuntu/Linux
+                dev = pool.get(name) # returns Netmiko handler
+                
+                # OS Version
+                try:
+                    os_out = dev.send_command("grep PRETTY_NAME /etc/os-release").strip()
+                    node_data["os_version"] = os_out.split("=")[1].strip('"') if "=" in os_out else "Linux"
+                except Exception:
+                    pass
+                
+                # LLDP Neighbors
+                try:
+                    if_list = dev.send_command("ls /sys/class/net | grep -v lo").splitlines()
+                    lldp_dict = {}
+                    for iface in if_list:
+                        iface = iface.strip()
+                        if iface:
+                            lldp_out = dev.send_command(f"lldptool -t -i {iface} -V sysName -n")
+                            lldp_dict[iface] = lldp_out
+                    
+                    connections = parse_ubuntu_lldp(lldp_dict)
+                    for c in connections:
+                        node_data["physical_links"].append({
+                            "local_interface": c["local_int"],
+                            "parent_bundle": None,
+                            "remote_port": "Unknown",
+                            "remote_hostname": c["remote_sys"]
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to get LLDP for Linux {name}: {e}")
+                    
+            return {"status": "Success", "data": node_data}
         except Exception as e:
-            logger.warning(f"Failed to get LLDP neighbors for {name}: {e}")
-            errors.append(f"{name}: {e}")
+            logger.error(f"Failed to collect topology data for {name}: {e}")
+            return {"status": "Failed", "error": f"{name}: {str(e)}"}
 
-    if not topology_links:
-        return f"Failed to discover topology. Errors: {'; '.join(errors)}"
+    # Execute collection concurrently for all registered devices
+    final_nodes = []
+    errors = []
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        future_to_device = {
+            executor.submit(collect_device_data, name, info): name
+            for name, info in DEVICE_MAP.items()
+        }
+        for future in concurrent.futures.as_completed(future_to_device):
+            res = future.result()
+            if res["status"] == "Success":
+                final_nodes.append(res["data"])
+            else:
+                errors.append(res["error"])
 
-    # Deduplicate bidirectional links (A-B and B-A are the same edge)
+    # Deduplicate and build Mermaid
+    mermaid = ["graph TD"]
     seen_links = set()
-    unique_links = []
-    for link in topology_links:
-        edge = tuple(sorted([
-            (link["source"], link["source_port"]),
-            (link["target"], link["target_port"])
-        ]))
-        if edge not in seen_links:
-            seen_links.add(edge)
-            unique_links.append(link)
+    
+    groups = {
+        "Gateway": [],
+        "SuperSpine": [],
+        "Spine": [],
+        "Leaf": [],
+        "Service": [],
+        "Internet": [],
+        "Server": []
+    }
 
-    result = ["Live Datacenter Network Topology (Discovered via LLDP):", ""]
-    result.append("Connections:")
-    for link in unique_links:
-        result.append(f"  {link['source']} [{link['source_port']}] <---> {link['target']} [{link['target_port']}]")
+    for node in final_nodes:
+        hostname = node["hostname"]
+        dtype = node["device_type"]
+        name_upper = hostname.upper()
+        
+        if "GW" in name_upper or "SRX" in name_upper:
+            groups["Gateway"].append(hostname)
+        elif "SUPER" in name_upper:
+            groups["SuperSpine"].append(hostname)
+        elif "SPINE" in name_upper or "SPN" in name_upper:
+            groups["Spine"].append(hostname)
+        elif "LEAF" in name_upper:
+            groups["Leaf"].append(hostname)
+        elif "SERVICE" in name_upper:
+            groups["Service"].append(hostname)
+        elif "INTERNET" in name_upper or "INTER" in name_upper:
+            groups["Internet"].append(hostname)
+        elif dtype == "Ubuntu":
+            groups["Server"].append(hostname)
+            
+        for conn in node["physical_links"]:
+            remote = conn["remote_hostname"]
+            remote = remote.split(".")[0]
+            
+            actual_remote = None
+            for n in final_nodes:
+                h = n["hostname"]
+                if h.lower() == remote.lower() or h.lower().startswith(remote.lower()):
+                    actual_remote = h
+                    break
+            
+            if actual_remote:
+                link = tuple(sorted([hostname, actual_remote]))
+                if link not in seen_links:
+                    seen_links.add(link)
+                    mermaid.append(f"    {hostname} -- {conn['local_interface']} --- {actual_remote}")
+
+    # Build markdown output
+    md = [
+        "# Discovered Network Topology Final Report",
+        "",
+        "## 1. Network Topology Graph (Mermaid)",
+        "```mermaid",
+        "\n".join(mermaid),
+        "```",
+        "",
+        "## 2. Device Summary",
+        "| Hostname | IP | Type | Model | OS Version |",
+        "| :--- | :--- | :--- | :--- | :--- |"
+    ]
+    
+    # Sort nodes by hostname for stable display
+    final_nodes = sorted(final_nodes, key=lambda x: x["hostname"])
+    for n in final_nodes:
+        md.append(f"| {n['hostname']} | {n['management_ip']} | {n['device_type']} | {n['model']} | {n['os_version']} |")
+
+    md.append("\n## 3. Detailed Connections & Sessions")
+    for n in final_nodes:
+        md.append(f"\n### {n['hostname']} ({n['management_ip']})")
+        
+        if n['physical_links']:
+            md.append("#### Physical Links (LLDP)")
+            for l in n['physical_links']:
+                bundle = f" (Bundle: {l['parent_bundle']})" if l['parent_bundle'] else ""
+                md.append(f"- `{l['local_interface']}`{bundle} <---> **{l['remote_hostname']}** (on port `{l['remote_port']}`)")
+        else:
+            md.append("- No physical LLDP links found.")
+        
+        if n['logical_bundles']:
+            md.append("#### Logical Bundles (Aggregated Ethernet)")
+            for b in n['logical_bundles']:
+                md.append(f"- `{b['name']}`: Members: `[{', '.join(b['members'])}]`")
+        
+        if n['bgp_sessions']:
+            md.append("#### BGP Peering Sessions")
+            md.append("| Remote Peer | AS | State | Description |")
+            md.append("| :--- | :--- | :--- | :--- |")
+            for s in n['bgp_sessions']:
+                md.append(f"| {s['remote_ip']} | {s['remote_as']} | {s['state']} | {s['description']} |")
 
     if errors:
-        result.append("")
-        result.append("Warning: Could not contact some devices:")
+        md.append("\n## 4. Warnings / Discovery Errors")
         for err in errors:
-            result.append(f"  - {err}")
+            md.append(f"- {err}")
 
-    return "\n".join(result)
+    return "\n".join(md)
 
 
 # ===================================================================
@@ -1546,8 +1863,42 @@ def send_notification(audience_type: str, message: str, session_id: str = "") ->
         return f"Warning: SLACK_BOT_TOKEN not configured. Message printed to logs:\n[{audience_type}] {message}"
 
     aud = audience_type.strip().lower()
+    
+    # Load session state if session_id is provided
+    origin_channel = ""
+    origin_thread = ""
+    if session_id:
+        try:
+            state_key = f"state:{session_id}"
+            state_data = redis_client.get(state_key)
+            if state_data:
+                state = json.loads(state_data)
+                origin_channel = state.get("slack_channel_id", "")
+                origin_thread = state.get("slack_thread_ts", "")
+        except Exception as ex:
+            logger.warning(f"Failed to load session state for routing: {ex}")
+
+    # Determine target channel
     if aud == "customer":
-        channel = os.environ.get("SLACK_CHANNEL_CUSTOMER", "#all-customer-001")
+        # Best-effort resolution of originating channel if session_id is not passed
+        if not session_id:
+            try:
+                for key in redis_client.scan_iter("state:*"):
+                    data_str = redis_client.get(key)
+                    if data_str:
+                        state = json.loads(data_str)
+                        if state.get("current_assignee") in ("customer-advisory-agent", "FINISH") and not state.get("closure_notified"):
+                            session_id = key.replace("state:", "") if isinstance(key, str) else key.decode().replace("state:", "")
+                            origin_channel = state.get("slack_channel_id", "")
+                            origin_thread = state.get("slack_thread_ts", "")
+                            break
+            except Exception as scan_ex:
+                logger.warning(f"Best-effort session scan failed: {scan_ex}")
+
+        if origin_channel:
+            channel = origin_channel
+        else:
+            channel = os.environ.get("SLACK_CHANNEL_CUSTOMER", "#all-customer-001")
         prefix = "📢 *Customer Update:*\n"
     elif aud == "l3_engineer":
         channel = os.environ.get("SLACK_CHANNEL_ALERTS", "#noc-l3-alerts")
@@ -1560,10 +1911,17 @@ def send_notification(audience_type: str, message: str, session_id: str = "") ->
         "Authorization": f"Bearer {slack_token}",
         "Content-Type": "application/json; charset=utf-8"
     }
+    
+    # Replace markdown bold ** with * for Slack format compatibility
+    if message:
+        message = message.replace("**", "*")
+        
     payload = {
         "channel": channel,
         "text": f"{prefix}{message}"
     }
+    if origin_thread:
+        payload["thread_ts"] = origin_thread
 
     try:
         resp = req_lib.post(url, json=payload, headers=headers, timeout=10)
@@ -3098,6 +3456,127 @@ if __name__ == "__main__":
         issue = data.get("issue", {})
         issue_key = issue.get("key", "UNKNOWN")
         fields = issue.get("fields", {})
+
+        # Check if this is a comment mention event
+        if webhook_event == "comment_created":
+            comment_obj = data.get("comment", {})
+            comment_body = comment_obj.get("body", "")
+            author = comment_obj.get("author", {})
+            author_name = author.get("displayName", "Jira User")
+            author_id = author.get("accountId", "jira-user")
+            
+            # Extract text from comment body (Jira Cloud uses ADF)
+            comment_text = ""
+            if isinstance(comment_body, dict):
+                for block in comment_body.get("content", []):
+                    for node in block.get("content", []):
+                        if node.get("type") == "text":
+                            comment_text += node.get("text", "")
+                        elif node.get("type") == "hardBreak":
+                            comment_text += "\n"
+                    comment_text += "\n"
+            else:
+                comment_text = str(comment_body)
+                
+            comment_text = comment_text.strip()
+            
+            # Check if mentioned
+            bot_names = ["GreenNode Network AI Agent", "NOC-AI-Agent"]
+            is_mentioned = any(name.lower() in comment_text.lower() for name in bot_names)
+            is_self = any(name.lower() in author_name.lower() for name in bot_names)
+            
+            if is_mentioned and not is_self:
+                logger.info(f"Jira Mention Webhook: Bot mentioned in comment on {issue_key} by {author_name}")
+                
+                # Strip bot name and @ sign
+                clean_comment = comment_text
+                for name in bot_names:
+                    import re
+                    clean_comment = re.sub(re.escape(name), "", clean_comment, flags=re.IGNORECASE).strip()
+                clean_comment = re.sub(r"^@\s*", "", clean_comment).strip()
+                
+                # Find session in Redis or initialize new one
+                session_id = f"jira-{issue_key}"
+                for key in redis_client.scan_iter("state:*"):
+                    data_str = redis_client.get(key)
+                    if data_str:
+                        try:
+                            state_data = json.loads(data_str)
+                            if state_data.get("jira_issue_key") == issue_key:
+                                session_id = state_data.get("session_id", key.split("state:", 1)[1])
+                                break
+                        except Exception:
+                            continue
+                
+                # We launch a background thread to call Supervisor Agent asynchronously
+                import threading
+                
+                def _call_supervisor_and_comment_async(sess_id, clean_msg, auth_id, key):
+                    supervisor_url = redis_client.get("agent:url:supervisor-network-engineer-agent")
+                    if not supervisor_url:
+                        logger.error("Supervisor URL not found in Redis for comment mention")
+                        add_task_comment(key, "⚠️ Không tìm thấy URL của Supervisor Agent trong hệ thống.")
+                        return
+                    
+                    if supervisor_url.startswith('"') and supervisor_url.endswith('"'):
+                        supervisor_url = supervisor_url[1:-1]
+                        
+                    try:
+                        invocations_url = supervisor_url.rstrip("/") + "/invocations"
+                        logger.info(f"Background thread invoking Supervisor for session {sess_id}...")
+                        
+                        resp = req_lib.post(invocations_url, json={
+                            "message": clean_msg,
+                            "user_id": f"jira-{auth_id}",
+                            "session_id": sess_id
+                        }, timeout=120)  # comfortable 120s timeout
+                        
+                        if resp.status_code == 200:
+                            agent_resp_json = resp.json()
+                            agent_reply = agent_resp_json.get("response", "")
+                            
+                            # Add session to state and update redis with jira_issue_key
+                            state_data = redis_client.get(f"state:{sess_id}")
+                            if state_data:
+                                try:
+                                    parsed_state = json.loads(state_data)
+                                    if not parsed_state.get("jira_issue_key"):
+                                        parsed_state["jira_issue_key"] = key
+                                        redis_client.set(f"state:{sess_id}", json.dumps(parsed_state))
+                                except Exception:
+                                    pass
+                            else:
+                                new_state = {
+                                    "session_id": sess_id,
+                                    "jira_issue_key": key,
+                                    "diagnostic_logs": [],
+                                    "messages": [{"role": "user", "content": clean_msg}]
+                                }
+                                redis_client.set(f"state:{sess_id}", json.dumps(new_state))
+                            
+                            if agent_reply:
+                                add_task_comment(key, agent_reply)
+                        else:
+                            logger.error(f"Failed to invoke Supervisor: HTTP {resp.status_code} — {resp.text}")
+                            add_task_comment(key, "⚠️ Xin lỗi, có lỗi hệ thống xảy ra khi chuyển tiếp yêu cầu đến Supervisor Agent.")
+                    except Exception as ex:
+                        logger.error(f"Exception in background Supervisor thread: {ex}")
+                        add_task_comment(key, f"⚠️ Có lỗi xảy ra trong quá trình xử lý yêu cầu: {ex}")
+                
+                # Start background thread
+                threading.Thread(
+                    target=_call_supervisor_and_comment_async, 
+                    args=(session_id, clean_comment, author_id, issue_key), 
+                    daemon=True
+                ).start()
+                
+                return JSONResponse({
+                    "status": "processed_async",
+                    "issue_key": issue_key,
+                    "message": "Mention detected, processing in background thread"
+                })
+            
+            return JSONResponse({"status": "ignored", "reason": "No mention or self comment"})
 
         # Check if this is an approval or rework event
         status_name = fields.get("status", {}).get("name", "").lower()

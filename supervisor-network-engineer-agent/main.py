@@ -40,6 +40,8 @@ llm = ChatOpenAI(
 )
 
 # --- Redis Config ---
+# NOTE: Connect via internal LAN IP '10.116.0.181' for local/on-premise hosts (e.g. MCP Server).
+# Connect via public NAT IP '49.213.77.222' for cloud-deployed Greennode agents.
 REDIS_HOST = os.environ.get("REDIS_HOST", "49.213.77.222")
 REDIS_PORT = int(os.environ.get("REDIS_PORT", "6379"))
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", None)
@@ -93,6 +95,55 @@ def send_telegram_message(message: str):
         logger.error(f"Error sending Telegram message: {e}")
 
 
+def send_jira_comment(issue_key: str, comment_text: str):
+    """Post a comment to a Jira ticket using credentials from env."""
+    jira_base_url = os.environ.get("JIRA_BASE_URL", "").rstrip("/")
+    jira_user = os.environ.get("JIRA_USER_EMAIL")
+    jira_token = os.environ.get("JIRA_API_TOKEN")
+    
+    if not jira_base_url or not jira_user or not jira_token:
+        logger.warning("Jira configuration missing in Supervisor env. Cannot post comment.")
+        return
+        
+    # Simple ADF converter
+    paragraphs = comment_text.split("\n\n") if "\n\n" in comment_text else [comment_text]
+    doc_content = []
+    for para in paragraphs:
+        lines = para.split("\n")
+        inline_nodes = []
+        for i, line in enumerate(lines):
+            if line:
+                inline_nodes.append({"type": "text", "text": line})
+            if i < len(lines) - 1:
+                inline_nodes.append({"type": "hardBreak"})
+        if inline_nodes:
+            doc_content.append({"type": "paragraph", "content": inline_nodes})
+            
+    adf_body = {
+        "version": 1,
+        "type": "doc",
+        "content": doc_content or [
+            {"type": "paragraph", "content": [{"type": "text", "text": "(empty)"}]}
+        ]
+    }
+    
+    url = f"{jira_base_url}/rest/api/3/issue/{issue_key}/comment"
+    try:
+        resp = requests.post(
+            url,
+            auth=(jira_user, jira_token),
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            json={"body": adf_body},
+            timeout=15
+        )
+        if resp.status_code == 201:
+            logger.info(f"Successfully posted final result to Jira ticket {issue_key}")
+        else:
+            logger.error(f"Failed to post comment to Jira: HTTP {resp.status_code} — {resp.text}")
+    except Exception as e:
+        logger.error(f"Error posting comment to Jira ticket {issue_key}: {e}")
+
+
 def parse_json_garbage(text: str) -> dict:
     """Extract and parse first JSON block in text."""
     # Find JSON bounds
@@ -103,10 +154,46 @@ def parse_json_garbage(text: str) -> dict:
     return json.loads(text)
 
 
+def safe_get(d: dict, key: str, default: str = "") -> str:
+    """Safely get string value from dict, stripping it, handling None and non-string types."""
+    val = d.get(key)
+    if val is None:
+        return default
+    return str(val).strip()
+
+
+def get_slack_user_profile(user_id: str) -> dict:
+    """Fetch user profile details from Slack using Web API."""
+    token = os.environ.get("SLACK_BOT_TOKEN")
+    if not token or not user_id or not user_id.startswith("slack-"):
+        return {}
+    slack_uid = user_id.replace("slack-", "")
+    try:
+        url = "https://slack.com/api/users.info"
+        resp = requests.get(url, params={"user": slack_uid}, headers={"Authorization": f"Bearer {token}"}, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            if data.get("ok"):
+                user_data = data.get("user", {})
+                profile = user_data.get("profile", {})
+                return {
+                    "real_name": user_data.get("real_name") or profile.get("real_name") or "",
+                    "title": profile.get("title") or "",
+                    "pronouns": profile.get("pronouns") or ""
+                }
+    except Exception as e:
+        logger.error(f"Error fetching slack user profile: {e}")
+    return {}
+
+
 def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str = None) -> str:
     """Load state, query router LLM, route to next worker, or conclude."""
     state = StateManager.get_state(session_id)
     
+    if state and state.get("current_assignee") == "FINISH" and not user_message:
+        logger.info(f"Session {session_id} is already in FINISH state. Skipping supervisor loop.")
+        return state.get("rca_summary") or "Diagnostic workflow completed."
+        
     if not state:
         state = {
             "session_id": session_id,
@@ -122,6 +209,9 @@ def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str 
             "loop_count": 0,
             "messages": []
         }
+        # Fetch Slack user profile if user_id is provided
+        if user_id and user_id.startswith("slack-"):
+            state["user_profile"] = get_slack_user_profile(user_id)
         # Load pre-seeded Slack context if available (set by slack_bot.py before state existed)
         try:
             slack_ctx_data = redis_client.get(f"slack_ctx:{session_id}")
@@ -134,6 +224,8 @@ def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str 
             pass
     elif user_id:
         state["user_id"] = user_id
+        if "user_profile" not in state and user_id.startswith("slack-"):
+            state["user_profile"] = get_slack_user_profile(user_id)
     
     if user_message:
         state["messages"].append({"role": "user", "content": user_message})
@@ -143,7 +235,7 @@ def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str 
     state["loop_count"] += 1
     
     # 1. Enforce Fallback Limit
-    if state["loop_count"] > 5:
+    if state["loop_count"] > 5 and state.get("current_assignee") not in ["customer-advisory-agent", "FINISH"]:
         logger.warning(f"Loop limit exceeded ({state['loop_count']}) for session {session_id}. Forcing escalation.")
         state["diagnostic_logs"].append("Supervisor: Max loop count exceeded. Escalating to Level 3.")
         state["current_assignee"] = "customer-advisory-agent"
@@ -175,11 +267,11 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
         response = llm.invoke(messages)
         res_json = parse_json_garbage(response.content.strip())
         
-        next_agent = res_json.get("next_action", "FINISH").strip()
-        incident_class = res_json.get("incident_class", "Service").strip()
-        reasoning = res_json.get("reasoning", "").strip()
-        intent = res_json.get("intent", "INCIDENT_RESPONSE").strip()
-        priority = res_json.get("priority", "P3").strip()
+        next_agent = safe_get(res_json, "next_action", "FINISH")
+        incident_class = safe_get(res_json, "incident_class", "Service")
+        reasoning = safe_get(res_json, "reasoning", "")
+        intent = safe_get(res_json, "intent", "INCIDENT_RESPONSE")
+        priority = safe_get(res_json, "priority", "P3")
         
         state["priority"] = priority
         
@@ -206,7 +298,7 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
         
         if next_agent == "FINISH":
             # Return direct response from JSON if available, fallback to rca_summary or default
-            direct_response = res_json.get("response", "").strip()
+            direct_response = safe_get(res_json, "response", "")
             
             # Auto-send completed session logs to Telegram
             try:
@@ -235,20 +327,59 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
                 
                 slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
                 customer_channel = os.environ.get("SLACK_CHANNEL_CUSTOMER", "#all-customer-001")
-                if slack_token and not state.get("closure_notified"):
+                slack_channel = state.get("slack_channel_id", "")
+                if slack_token and not state.get("closure_notified") and (slack_channel == customer_channel):
                     symptoms = state.get("symptoms", "")
                     rca = state.get("rca_summary", "")
                     jira = state.get("jira_issue_key", "")
                     
-                    closure_msg = "✅ *[Incident Resolved]*\n\n"
+                    raw_summary = rca or direct_response or ""
+                    
+                    is_escalated = False
+                    if state.get("loop_count", 0) > 5:
+                        is_escalated = True
+                    else:
+                        summary_lower = raw_summary.lower()
+                        if "escalat" in summary_lower or "level 3" in summary_lower or "l3" in summary_lower:
+                            is_escalated = True
+                        for log in state.get("diagnostic_logs", []):
+                            if "escalat" in log.lower() or "level 3" in log.lower() or "l3" in log.lower():
+                                is_escalated = True
+                                break
+                    
+                    if is_escalated:
+                        closure_msg = "⚠️ *[Incident Escalated to L3]*\n\n"
+                    else:
+                        closure_msg = "✅ *[Incident Resolved]*\n\n"
+                        
                     if jira:
                         closure_msg += f"📋 *Ticket:* `{jira}`\n"
-                    if symptoms:
-                        closure_msg += f"📝 *Initial Symptoms:* {symptoms[:300]}\n"
-                    if rca:
-                        closure_msg += f"🔍 *Result:* {rca[:500]}\n"
-                    elif direct_response:
-                        closure_msg += f"🔍 *Result:* {direct_response[:500]}\n"
+                    
+                    # Clean up technical details, logs, code blocks, or conversation context
+                    import re
+                    # Remove ```...``` code blocks
+                    clean_summary = re.sub(r"```.*?```", "", raw_summary, flags=re.DOTALL)
+                    
+                    # Filter out log/debug lines and conversation context
+                    lines = []
+                    for line in clean_summary.split("\n"):
+                        l_strip = line.strip()
+                        if not l_strip:
+                            continue
+                        if l_strip.startswith("---") or "Conversation Context" in l_strip or "End Context" in l_strip:
+                            continue
+                        if any(k in l_strip.lower() for k in ["diagnostic_logs", "rca_summary", "loop_count"]):
+                            continue
+                        lines.append(line)
+                    clean_summary = "\n".join(lines).strip()
+                    
+                    if clean_summary:
+                        # Convert markdown bold to Slack format
+                        clean_summary = clean_summary.replace("**", "*")
+                        closure_msg += f"{clean_summary}\n"
+                    else:
+                        closure_msg += "The issue has been resolved by our engineering team.\n"
+                    
                     closure_msg += f"\n💬 If you have any further questions, please reply here or contact the NOC team directly."
                     
                     import requests as req_lib_local
@@ -296,7 +427,7 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
         threading.Thread(target=_trigger, daemon=True).start()
         
         # Return AI-generated status update to user
-        ai_response = res_json.get("response", "").strip()
+        ai_response = safe_get(res_json, "response", "")
         if ai_response:
             return ai_response
         return f"Routing to {next_agent} for processing..."
@@ -365,13 +496,18 @@ def handler(payload: dict, context: RequestContext) -> dict:
         sender = payload.get("sender", "unknown")
         logger.info(f"Received callback from worker {sender} for session {session_id_cb}")
         
-        # Resume the supervisor loop AND post result back to Slack thread
+        # Resume the supervisor loop AND post result back to Slack thread / Jira comment
         def _callback_and_reply():
             result = run_supervisor_loop(session_id_cb)
-            # Post the final result back to the originating Slack thread
             try:
                 cb_state = StateManager.get_state(session_id_cb)
                 if cb_state and cb_state.get("current_assignee") == "FINISH":
+                    # 1. Post to Jira if associated
+                    jira_key = cb_state.get("jira_issue_key")
+                    if jira_key and result:
+                        send_jira_comment(jira_key, result)
+                    
+                    # 2. Post to Slack thread
                     slack_channel = cb_state.get("slack_channel_id")
                     slack_thread = cb_state.get("slack_thread_ts")
                     if slack_channel and slack_thread and result:
@@ -395,8 +531,8 @@ def handler(payload: dict, context: RequestContext) -> dict:
                                 logger.info(f"Posted callback result to Slack thread {slack_thread}")
                             else:
                                 logger.warning(f"Failed to post callback to Slack: {resp.json().get('error', resp.text[:200])}")
-            except Exception as slack_ex:
-                logger.error(f"Failed to post callback result to Slack thread: {slack_ex}")
+            except Exception as e:
+                logger.error(f"Failed to post callback result to destinations: {e}")
         
         threading.Thread(target=_callback_and_reply, daemon=True).start()
         return {
