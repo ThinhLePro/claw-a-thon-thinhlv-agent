@@ -124,6 +124,21 @@ The agents do not poll each other; they communicate asynchronously using a **sta
     ```
 5.  **Re-entry & Routing Evaluation**: The Supervisor intercepts the callback, resumes the orchestration loop, loads the newly written state from Redis, and makes the next routing routing decision.
 
+### 3. CAB Approval & Automated Deployment Callback
+
+When a configuration change proposed by the Senior Network Engineer requires CAB approval, the Supervisor transitions the session into a `PAUSED` state. The lifecycle resumes via the following automated workflow:
+
+1. **Approval Webhook**: When an L3 Human Engineer clicks **Approve** on Slack (`#noc-cab-approvals`) or updates the status on Jira, it triggers a signed webhook to the MCP Server (`/webhook/jira`).
+2. **Automated Configuration Application**: The MCP Server parses the target device and configuration payload directly from the ticket details and executes `_execute_config_change()` via Netconf (locks db, commit check, confirmed 3min commit, permanent confirmation, and unlock).
+3. **Supervisor Notification Callback**:
+   - The MCP Server updates the session state in Redis under `state:<session_id>` with the deployment result logs.
+   - It sets `current_assignee` back to `supervisor-network-engineer-agent`.
+   - It sends an HTTP POST callback to the Supervisor's `/invocations` endpoint with `action: "callback"` to trigger verification.
+4. **Verification & Failure Escalation**:
+   - The Supervisor Agent intercepts the callback, loads the updated state, and routes to verify the incident.
+   - **Verification failure**: If diagnostics show the incident is still not resolved, the Customer Advisory Agent is dispatched to notify the customer and the team continues troubleshooting alternative paths.
+   - **MCP Deployment failure**: If the MCP configuration push fails, it immediately triggers an **Escalation Alert** to Slack `#noc-l3-alerts` and the L3/Manager Telegram channel, while simultaneously calling back the Supervisor to troubleshoot alternative solutions.
+
 ---
 
 ## Redis Session & Directory State Management

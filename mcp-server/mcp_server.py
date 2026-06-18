@@ -3888,6 +3888,107 @@ if __name__ == "__main__":
         # Update Jira with result
         _update_jira_issue_status(issue_key, success, log_text)
 
+        # --- Trigger callback back to NOC Supervisor Agent & Update Redis State ---
+        session_id = None
+        try:
+            for key in redis_client.scan_iter("state:*"):
+                data_str = redis_client.get(key)
+                if data_str:
+                    try:
+                        state_data = json.loads(data_str)
+                        if state_data.get("jira_issue_key") == issue_key:
+                            session_id = state_data.get("session_id", key.split("state:", 1)[1])
+                            break
+                    except Exception:
+                        continue
+        except Exception as scan_err:
+            logger.error(f"Failed to scan Redis for issue_key {issue_key}: {scan_err}")
+
+        if session_id:
+            state_key = f"state:{session_id}"
+            try:
+                state_data = redis_client.get(state_key)
+                if state_data:
+                    state = json.loads(state_data)
+                    status_str = "SUCCESS" if success else "FAILED"
+                    state["diagnostic_logs"].append(
+                        f"L3 Human CAB Approved. Configuration applied to device {device_name} via MCP: {status_str}.\n"
+                        f"Log:\n{log_text}"
+                    )
+                    
+                    # If failed, escalate to NOC L3 Engineer
+                    if not success:
+                        escalation_text = (
+                            f"🚨 <b>[CONFIG APPLICATION FAILED]</b>\n"
+                            f"━━━━━━━━━━━━━━━━━━━\n"
+                            f"⚠️ <b>Junos Configuration Application Error on Core Device</b>\n"
+                            f"▪ <b>Device</b>: <code>{device_name}</code>\n"
+                            f"▪ <b>Ticket</b>: <code>{issue_key}</code>\n"
+                            f"▪ <b>Session ID</b>: <code>{session_id}</code>\n"
+                            f"▪ <b>Error Log</b>:\n<pre>{log_text[:500]}</pre>\n"
+                            f"📢 <b>Escalating to NOC L3 Engineers and Manager for manual rollback/intervention. AI agents will continue troubleshooting alternative paths.</b>\n"
+                            f"━━━━━━━━━━━━━━━━━━━"
+                        )
+                        # Send telegram notification (manager / L3 room)
+                        tg_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+                        tg_chat_id = os.environ.get("TELEGRAM_SLA_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID", "6405110990")
+                        if tg_token and tg_chat_id:
+                            try:
+                                req_lib.post(
+                                    f"https://api.telegram.org/bot{tg_token}/sendMessage",
+                                    json={"chat_id": tg_chat_id, "text": escalation_text, "parse_mode": "HTML"},
+                                    timeout=10
+                                )
+                            except Exception as tg_err:
+                                logger.error(f"Failed to send escalation telegram message: {tg_err}")
+                        
+                        # Send slack notification to #noc-l3-alerts
+                        slack_token = os.environ.get("SLACK_BOT_TOKEN")
+                        slack_channel = os.environ.get("SLACK_CHANNEL_ALERTS", "C0BAPPKR8RZ")
+                        if slack_token and slack_channel:
+                            try:
+                                req_lib.post(
+                                    "https://slack.com/api/chat.postMessage",
+                                    json={
+                                        "channel": slack_channel,
+                                        "text": f"🚨 *[CONFIG APPLICATION FAILED]*\nFailed to apply config to *{device_name}* for ticket *{issue_key}*.\nError:\n```{log_text[:500]}```\nEscalating to NOC L3 Engineers."
+                                    },
+                                    headers={"Authorization": f"Bearer {slack_token}", "Content-Type": "application/json"},
+                                    timeout=10
+                                )
+                            except Exception as slack_err:
+                                logger.error(f"Failed to send escalation slack message: {slack_err}")
+                    
+                    state["current_assignee"] = "supervisor-network-engineer-agent"
+                    redis_client.set(state_key, json.dumps(state))
+
+                    # Trigger supervisor callback in a background thread to prevent Jira webhook timeout
+                    supervisor_url = redis_client.get("agent:url:supervisor-network-engineer-agent")
+                    if supervisor_url:
+                        if supervisor_url.startswith('"') and supervisor_url.endswith('"'):
+                            supervisor_url = supervisor_url[1:-1]
+                        
+                        callback_url = supervisor_url.rstrip("/") + "/invocations"
+                        logger.info(f"Triggering supervisor callback at {callback_url}...")
+                        
+                        def _trigger_callback_async(url, sess_id):
+                            try:
+                                cb_resp = req_lib.post(url, json={
+                                    "action": "callback",
+                                    "session_id": sess_id,
+                                    "sender": "mcp-server-webhook"
+                                }, timeout=30)
+                                logger.info(f"Callback to supervisor returned status {cb_resp.status_code}")
+                            except Exception as cb_err:
+                                logger.error(f"Failed to send callback to supervisor: {cb_err}")
+                        
+                        import threading
+                        threading.Thread(target=_trigger_callback_async, args=(callback_url, session_id), daemon=True).start()
+                    else:
+                        logger.warning("Supervisor URL not in Redis, cannot trigger callback.")
+            except Exception as redis_err:
+                logger.error(f"Failed to update state and trigger callback for {session_id}: {redis_err}")
+
         return JSONResponse({
             "status": "success" if success else "failed",
             "issue_key": issue_key,
