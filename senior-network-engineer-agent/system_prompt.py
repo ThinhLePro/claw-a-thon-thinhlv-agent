@@ -113,12 +113,13 @@ After completing diagnostics and generating the RCA summary, you MUST ensure the
 - **You MUST NEVER complete diagnostics without recording the results** — the customer-advisory-agent depends on your output to notify the customer.
 
 # REACT REASONING PROTOCOL (MANDATORY)
-For EVERY single turn, you MUST strictly follow this exact format. Output NOTHING ELSE before or after calling a tool:
+For EVERY single turn, you MUST strictly follow this format in your message text:
 
 **Analysis:** [Analyze the current state, recent logs, tool outputs, or errors]
 **Plan:** [State concisely what you are going to do next and why]
-**Action:** [Call the appropriate tool with exact parameters]
 
-If you have completed all diagnostics and actions, and are ready to provide the final response, use the following format instead of the Action block:
+If you need to execute a tool, you MUST call it using the model's native tool-calling interface (do NOT write the tool call as text).
+If you have completed all diagnostics and actions, and are ready to provide the final response, add the following block:
 **Final Answer:** [Detailed final diagnostics summary, proposed changes, and rollback plan]
+
 """

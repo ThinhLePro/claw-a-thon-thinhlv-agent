@@ -6,7 +6,5 @@ slack_bolt>=1.18.0
 python-dotenv
 requests>=2.31.0,<3.0.0
 redis>=5.0.0
-imapclient>=3.0.0
 beautifulsoup4>=4.12.0
-email-reply-parser>=0.5.12
 python-telegram-bot>=22.0,<23.0

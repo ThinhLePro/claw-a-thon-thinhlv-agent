@@ -974,6 +974,149 @@ def _send_slack_cab_approval(issue_key: str, device_display: str, reason: str, c
         logger.error(f"Exception posting CAB approval request: {e}")
 
 
+def _send_teams_cab_approval(issue_key: str, device_display: str, reason: str, config_payload: str):
+    """Post an approval request with Adaptive Card to the Teams channel/conversation of the active session."""
+    import json
+    service_url = None
+    conversation_id = None
+    
+    try:
+        # Check if there is a global or latest Teams context stored
+        teams_ctx_data = redis_client.get("teams_ctx:latest")
+        if teams_ctx_data:
+            ctx = json.loads(teams_ctx_data)
+            service_url = ctx.get("service_url")
+            conversation_id = ctx.get("conversation_id")
+            
+        # If not found, scan active sessions
+        if not service_url or not conversation_id:
+            for key in redis_client.scan_iter("state:*"):
+                data = redis_client.get(key)
+                if data:
+                    state = json.loads(data)
+                    if state.get("teams_service_url") and state.get("teams_conversation_id"):
+                        service_url = state["teams_service_url"]
+                        conversation_id = state["teams_conversation_id"]
+                        break
+    except Exception as e:
+        logger.error(f"Error scanning Redis for Teams context: {e}")
+
+    if not service_url or not conversation_id:
+        logger.warning("No Teams context found in Redis. Skipping Teams CAB notification.")
+        return
+
+    # Fetch token
+    app_id = os.environ.get("TEAMS_BOT_APP_ID")
+    app_password = os.environ.get("TEAMS_BOT_APP_PASSWORD")
+    tenant_id = os.environ.get("TEAMS_BOT_TENANT_ID", "botframework.com")
+    if not app_id or not app_password:
+        logger.warning("TEAMS_BOT_APP_ID or TEAMS_BOT_APP_PASSWORD not set. Skipping Teams CAB.")
+        return
+
+    try:
+        # Get access token
+        tenant = tenant_id or "botframework.com"
+        token_url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+        token_payload = {
+            "grant_type": "client_credentials",
+            "client_id": app_id,
+            "client_secret": app_password,
+            "scope": "https://api.botframework.com/.default"
+        }
+        token_resp = req_lib.post(token_url, data=token_payload, timeout=10)
+        if token_resp.status_code != 200:
+            logger.error(f"Failed to get Teams token for CAB: {token_resp.text}")
+            return
+        token = token_resp.json().get("access_token")
+
+        # Post Adaptive Card
+        url = f"{service_url.rstrip('/')}/v3/conversations/{conversation_id}/activities"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        card_content = {
+            "type": "AdaptiveCard",
+            "version": "1.4",
+            "body": [
+                {
+                    "type": "TextBlock",
+                    "text": f"🔔 CAB Approval Required: {issue_key}",
+                    "weight": "Bolder",
+                    "size": "Medium",
+                    "color": "Warning"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": f"**Device:** {device_display}\n**Reason:** {reason}",
+                    "wrap": True
+                },
+                {
+                    "type": "TextBlock",
+                    "text": "**Proposed Configuration Diff (Junos XML / CLI):**",
+                    "weight": "Bolder"
+                },
+                {
+                    "type": "TextBlock",
+                    "text": f"```\n{config_payload}\n```",
+                    "wrap": True,
+                    "fontType": "Monospace"
+                },
+                {
+                    "type": "Input.Text",
+                    "id": "l3_comment",
+                    "placeholder": "Nhập comment/feedback (nêu lý do nếu Rework/Reject)...",
+                    "isMultiline": True
+                }
+            ],
+            "actions": [
+                {
+                    "type": "Action.Submit",
+                    "title": "✅ Approve",
+                    "data": {
+                        "action": "approve_change",
+                        "value": issue_key
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "❌ Reject",
+                    "data": {
+                        "action": "reject_change",
+                        "value": issue_key
+                    }
+                },
+                {
+                    "type": "Action.Submit",
+                    "title": "🔄 Request Changes (Rework)",
+                    "data": {
+                        "action": "request_changes",
+                        "value": issue_key
+                    }
+                }
+            ]
+        }
+
+        payload = {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": card_content
+                }
+            ]
+        }
+
+        resp = req_lib.post(url, json=payload, headers=headers, timeout=15)
+        if resp.status_code in [200, 201, 202]:
+            logger.info(f"Successfully posted CAB approval request to Teams for {issue_key}")
+        else:
+            logger.error(f"Failed to post CAB approval request to Teams: {resp.text}")
+    except Exception as e:
+        logger.error(f"Exception posting Teams CAB approval request: {e}")
+
+
 @mcp.tool()
 def propose_network_change(
     device_ip: str,
@@ -1864,6 +2007,10 @@ def send_notification(audience_type: str, message: str, session_id: str = "") ->
 
     aud = audience_type.strip().lower()
     
+    if session_id and (session_id.startswith("tg-chat-") or session_id.startswith("tg-")):
+        logger.info(f"Skipping Slack notification for Telegram session {session_id}")
+        return f"Notification skipped for Slack because the session '{session_id}' originates from Telegram."
+    
     # Load session state if session_id is provided
     origin_channel = ""
     origin_thread = ""
@@ -1877,6 +2024,7 @@ def send_notification(audience_type: str, message: str, session_id: str = "") ->
                 origin_thread = state.get("slack_thread_ts", "")
         except Exception as ex:
             logger.warning(f"Failed to load session state for routing: {ex}")
+
 
     # Determine target channel
     if aud == "customer":

@@ -51,6 +51,7 @@ def start_telegram_bot(process_message_fn, bot_token: str):
             "Bạn có thể tương tác với tôi hoặc tra cứu session logs bằng các lệnh sau:\n\n"
             "• `/sessions` — Liệt kê danh sách các phiên xử lý sự cố (sessions) đang hoạt động\n"
             "• `/logs <session_id>` — Xem chi tiết logs chẩn đoán của một session\n"
+            "• `/reset` — Khởi tạo lại phiên trò chuyện mới\n"
             "• `/help` — Hướng dẫn chi tiết\n\n"
             "Gửi tin nhắn bình thường để bắt đầu một phiên chẩn đoán mới! 🚀"
         )
@@ -70,6 +71,7 @@ def start_telegram_bot(process_message_fn, bot_token: str):
             "/start — Bắt đầu\n"
             "/sessions — Liệt kê các session\n"
             "/logs <session_id> — Lấy log session\n"
+            "/reset — Khởi tạo lại phiên trò chuyện\n"
             "/help — Hướng dẫn"
         )
         await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -172,17 +174,50 @@ def start_telegram_bot(process_message_fn, bot_token: str):
             logger.error(f"Error retrieving logs for session {session_id}: {e}")
             await update.message.reply_text(f"❌ Có lỗi xảy ra khi lấy logs: {e}")
 
+    bot_info = None
+
     async def handle_message(update: Update, context) -> None:
         """Handle incoming text messages to run the supervisor loop."""
         if not update.message or not update.message.text:
             return
 
-        user = update.effective_user
-        user_id = f"tg-{user.id}"
-        chat_id = f"tg-chat-{update.effective_chat.id}"
+        chat = update.effective_chat
         message = update.message.text
 
-        logger.info(f"Telegram msg from {user.first_name} ({user.id}): {message[:80]}...")
+        # If in a group or supergroup, filter for direct interactions (mention or reply)
+        if chat.type in ["group", "supergroup"]:
+            nonlocal bot_info
+            if not bot_info:
+                try:
+                    bot_info = await context.bot.get_me()
+                except Exception as e:
+                    logger.error(f"Failed to get bot info: {e}")
+                    return
+
+            bot_username = bot_info.username
+            bot_id = bot_info.id
+
+            mention = f"@{bot_username}"
+            is_mentioned = mention in message
+            is_reply_to_bot = False
+
+            if update.message.reply_to_message and update.message.reply_to_message.from_user:
+                is_reply_to_bot = update.message.reply_to_message.from_user.id == bot_id
+
+            if not is_mentioned and not is_reply_to_bot:
+                # Silently ignore general chatter in group
+                return
+
+            # Clean the mention from the message text
+            if is_mentioned:
+                import re
+                message = re.sub(rf'\s*{re.escape(mention)}\b\s*[:,-]?\s*', '', message, flags=re.IGNORECASE).strip()
+
+        user = update.effective_user
+        user_id = f"tg-{user.id}"
+        chat_id = f"tg-chat-{chat.id}"
+
+        logger.info(f"Telegram msg from {user.first_name} ({user.id}) in chat {chat_id}: {message[:80]}...")
 
         try:
             await update.message.chat.send_action("typing")
@@ -215,6 +250,27 @@ def start_telegram_bot(process_message_fn, bot_token: str):
                 f"⚠️ Có lỗi xảy ra khi xử lý tin nhắn.\nVui lòng thử lại sau."
             )
 
+    async def cmd_reset(update: Update, context) -> None:
+        """Handle /reset, /new, /newchat commands."""
+        chat = update.effective_chat
+        user = update.effective_user
+        user_id = f"tg-{user.id}"
+        chat_id = f"tg-chat-{chat.id}"
+        message = update.message.text or "/reset"
+        
+        try:
+            await update.message.chat.send_action("typing")
+        except Exception as te:
+            logger.warning(f"Failed to send typing indicator: {te}")
+
+        try:
+            response = await asyncio.to_thread(process_message_fn, message, user_id, chat_id)
+            html_response = markdown_to_telegram_html(response)
+            await update.message.reply_text(html_response, parse_mode="HTML")
+        except Exception as e:
+            logger.error(f"Error executing reset command: {e}")
+            await update.message.reply_text("❌ Có lỗi xảy ra khi reset session.")
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
@@ -223,10 +279,16 @@ def start_telegram_bot(process_message_fn, bot_token: str):
     application.add_handler(CommandHandler("help", cmd_help))
     application.add_handler(CommandHandler("sessions", cmd_sessions))
     application.add_handler(CommandHandler("logs", cmd_logs))
+    application.add_handler(CommandHandler("reset", cmd_reset))
+    application.add_handler(CommandHandler("new", cmd_reset))
+    application.add_handler(CommandHandler("newchat", cmd_reset))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     async def _run_polling():
+        nonlocal bot_info
         await application.initialize()
+        bot_info = await application.bot.get_me()
+        logger.info(f"Telegram Bot initialized as @{bot_info.username} (ID: {bot_info.id})")
         await application.start()
         await application.updater.start_polling(drop_pending_updates=True)
         logger.info("Telegram bot polling started!")

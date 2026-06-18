@@ -74,23 +74,25 @@ class StateManager:
         redis_client.set(f"agent:url:{agent_name}", url)
 
 
-def send_telegram_message(message: str):
-    """Send a message to Telegram using BOT_TOKEN and CHAT_ID from env."""
+def send_telegram_message(message: str, chat_id: str = None):
+    """Send a message to Telegram using BOT_TOKEN and given chat_id (or defaults from env)."""
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if not chat_id:
+        chat_id = os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
         return
     try:
+        html_msg = markdown_to_telegram_html(message)
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         resp = requests.post(url, json={
             "chat_id": chat_id,
-            "text": message,
+            "text": html_msg,
             "parse_mode": "HTML"
         }, timeout=10)
         if resp.status_code == 200:
-            logger.info("Successfully sent session log to Telegram.")
+            logger.info(f"Successfully sent Telegram message to {chat_id}.")
         else:
-            logger.error(f"Failed to send Telegram message: HTTP {resp.status_code} — {resp.text}")
+            logger.error(f"Failed to send Telegram message to {chat_id}: HTTP {resp.status_code} — {resp.text}")
     except Exception as e:
         logger.error(f"Error sending Telegram message: {e}")
 
@@ -190,9 +192,20 @@ def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str 
     """Load state, query router LLM, route to next worker, or conclude."""
     state = StateManager.get_state(session_id)
     
-    if state and state.get("current_assignee") == "FINISH" and not user_message:
-        logger.info(f"Session {session_id} is already in FINISH state. Skipping supervisor loop.")
-        return state.get("rca_summary") or "Diagnostic workflow completed."
+    if state and state.get("current_assignee") == "FINISH":
+        if not user_message:
+            logger.info(f"Session {session_id} is already in FINISH state. Skipping supervisor loop.")
+            return state.get("rca_summary") or "Diagnostic workflow completed."
+        else:
+            logger.info(f"Session {session_id} was in FINISH state. Resetting conversation for new message.")
+            state["diagnostic_logs"] = []
+            state["rca_summary"] = ""
+            state["jira_issue_key"] = ""
+            state["loop_count"] = 0
+            state["messages"] = []
+            state["symptoms"] = user_message
+            state["current_assignee"] = "supervisor-network-engineer-agent"
+
         
     if not state:
         state = {
@@ -207,7 +220,8 @@ def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str 
             "rca_summary": "",
             "jira_issue_key": "",
             "loop_count": 0,
-            "messages": []
+            "messages": [],
+            "start_time": datetime.now().isoformat()
         }
         # Fetch Slack user profile if user_id is provided
         if user_id and user_id.startswith("slack-"):
@@ -235,7 +249,7 @@ def run_supervisor_loop(session_id: str, user_message: str = None, user_id: str 
     state["loop_count"] += 1
     
     # 1. Enforce Fallback Limit
-    if state["loop_count"] > 5 and state.get("current_assignee") not in ["customer-advisory-agent", "FINISH", "PAUSED"]:
+    if state["loop_count"] > 15 and state.get("current_assignee") not in ["customer-advisory-agent", "FINISH", "PAUSED"]:
         logger.warning(f"Loop limit exceeded ({state['loop_count']}) for session {session_id}. Forcing escalation.")
         state["diagnostic_logs"].append("Supervisor: Max loop count exceeded. Escalating to Level 3.")
         state["current_assignee"] = "customer-advisory-agent"
@@ -306,7 +320,6 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
                     "waiting for l3", 
                     "waiting state", 
                     "pending cab approval", 
-                    "propose_network_change",
                     "change request created"
                 ]
                 if any(kw in last_senior_log.lower() for kw in waiting_keywords):
@@ -338,24 +351,7 @@ Please evaluate the logs, assignee, and rca_summary. Respond ONLY with the JSON 
             # Return direct response from JSON if available, fallback to rca_summary or default
             direct_response = safe_get(res_json, "response", "")
             
-            # Auto-send completed session logs to Telegram
-            try:
-                symptoms = state.get("symptoms", "No details")
-                jira = state.get("jira_issue_key", "None")
-                logs = state.get("diagnostic_logs", [])
-                
-                log_text = f"📋 <b>Session Completed: <code>{html.escape(session_id)}</code></b>\n"
-                log_text += f"━━━━━━━━━━━━━━━━━━━\n"
-                log_text += f"▪️ <b>Symptoms</b>: {markdown_to_telegram_html(symptoms)}\n"
-                log_text += f"▪️ <b>Jira Ticket</b>: <code>{html.escape(jira)}</code>\n"
-                log_text += f"━━━━━━━━━━━━━━━━━━━\n\n"
-                log_text += "<b>Diagnostic History:</b>\n"
-                for idx, log_entry in enumerate(logs, 1):
-                    log_text += f"{idx}. {markdown_to_telegram_html(log_entry)}\n"
-                
-                send_telegram_message(log_text)
-            except Exception as tg_ex:
-                logger.error(f"Failed to auto-send Telegram logs: {tg_ex}")
+
 
             # --- Auto-notify Customer on Resolution (Closure Notification) ---
             # Safety net: only sends if Customer Advisory Agent didn't already notify
@@ -520,7 +516,8 @@ def handler(payload: dict, context: RequestContext) -> dict:
             "rca_summary": "",
             "jira_issue_key": "",
             "loop_count": 0,
-            "messages": []
+            "messages": [],
+            "start_time": datetime.now().isoformat()
         }
         StateManager.save_state(session_id, state)
         
@@ -572,6 +569,14 @@ def handler(payload: dict, context: RequestContext) -> dict:
                                 logger.info(f"Posted callback result to Slack thread {slack_thread}")
                             else:
                                 logger.warning(f"Failed to post callback to Slack: {resp.json().get('error', resp.text[:200])}")
+
+                    # 3. Post to Telegram if associated
+                    try:
+                        if session_id_cb.startswith("tg-chat-"):
+                            tg_chat_id = session_id_cb.replace("tg-chat-", "")
+                            send_telegram_message(result, chat_id=tg_chat_id)
+                    except Exception as tg_ex:
+                        logger.error(f"Failed to post callback result to Telegram: {tg_ex}")
             except Exception as e:
                 logger.error(f"Failed to post callback result to destinations: {e}")
         
@@ -649,6 +654,8 @@ if TELEGRAM_BOT_TOKEN:
     )
     telegram_thread.start()
     logger.info("Telegram bot thread launched")
+
+# Teams Integration Removed
 
 if __name__ == "__main__":
     app.run(port=8080, host="0.0.0.0")

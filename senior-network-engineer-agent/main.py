@@ -166,9 +166,9 @@ Triage logs so far:
         StateManager.save_state(session_id, state)
 
     # Call back the Supervisor
-    supervisor_url = StateManager.get_agent_url("supervisor-network-engineer-agent")
-    if supervisor_url:
-        try:
+    try:
+        supervisor_url = StateManager.get_agent_url("supervisor-network-engineer-agent")
+        if supervisor_url:
             url = supervisor_url.rstrip("/") + "/invocations"
             logger.info(f"Triggering supervisor callback: {url}")
             response = requests.post(url, json={
@@ -177,8 +177,10 @@ Triage logs so far:
                 "sender": "senior-network-engineer-agent"
             }, timeout=10)
             response.raise_for_status()
-        except Exception as e:
-            logger.error(f"Failed to callback supervisor: {e}")
+        else:
+            logger.error("Supervisor agent URL not found in Redis.")
+    except Exception as e:
+        logger.error(f"Failed to callback supervisor: {e}")
 
 
 @app.entrypoint

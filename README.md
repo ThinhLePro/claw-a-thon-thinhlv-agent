@@ -393,6 +393,8 @@ To visualize and manually test the Natural Language parsing abilities of the NOC
     *   Automatically drafts title and body templates for direct Jira ticket creations.
     *   **MCP Tools Browser**: A dedicated tab listing all registered tools, their parameters, and expected input schemas in real time.
 
+![MCP Tools Dashboard](assets/mcp_tools_dashboard.png)
+
 ---
 
 ## Telegram Bot Integration
@@ -425,3 +427,81 @@ Run the simulation script:
 mcp-env/bin/python scratch/simulate_ddos_flow.py
 ```
 This script initializes the Redis session state and triggers the orchestrator loop, logging diagnostic logs in real-time until completion.
+
+---
+
+## SLA Incident Tracking & Escalation Scenario
+
+The system supports a complete simulation flow for SLA tracking, automatic priority elevation, and Telegram manager escalation.
+
+### Scenario Workflow
+1. **Normal Priority Incident Intake**:
+   - A customer (Vip Customer) reports an issue via Slack or Teams (e.g., *"Kiểm tra đường truyền từ server proxy của tôi đến trang zalo.me có vấn đề gì không ?"*).
+   - The NOC Supervisor Agent initializes a session (e.g., `KAN-54`) with **P2 (Normal)** priority and triggers the SLA countdown.
+2. **Active Countdown**:
+   - The `customer-advisory-agent` runs a background SLA monitor thread that tracks the active session in Redis, posting and editing a real-time countdown status message on Telegram.
+3. **Delay & Priority Elevation to P1**:
+   - As investigation reveals a core connectivity block on the Core Gateway (`LAB-INTERNET-GATEWAY-01` WAN interface configured with placeholder IP `88.88.88.1`), the agent identifies a large blast radius affecting all internet traffic.
+   - The Supervisor Agent automatically elevates the priority to **P1 (Critical)** and posts an alarm to `#noc-l3-alerts`.
+4. **SLA Breach & Manager Escalation**:
+   - If the incident is not resolved within the SLA limit (configured to `120s` for simulation), the SLA monitor thread flags the session as `breached`.
+   - The bot automatically posts an **[URGENT SLA ESCALATION]** alert to a separate Telegram channel/group, notifying L3 engineers and managers for immediate manual review.
+5. **Resolution Confirmation**:
+   - Once a configuration change is proposed (e.g. correcting WAN interface IP to `88.88.88.89` in `KAN-55`) and approved by the L3 Human CAB in `#noc-cab-approvals`, the session is marked as `FINISH`.
+   - The Telegram status message is updated to **[Incident Resolved within SLA]** (or displaying the final breach status) showing the total resolution duration.
+
+### Visualizing the SLA and Escalation Flow
+
+Below are screenshots demonstrating the complete lifecycle of a simulated incident:
+
+#### 1. Normal Priority Incident & Dialog
+The customer (Vip Customer) opens a chat regarding Zalo connectivity. The agent initializes the troubleshooting session under normal SLA criteria:
+![Customer Chat Dialogue Part 1](assets/1_slack_customer_chat_part1.png)
+
+#### 2. Discovery of Gateway Outage & P1 Priority Elevation
+As investigation uncovers that the Core Gateway has a misconfigured IP, the agent updates the status to P1 priority, notifying the customer and escalating:
+![Customer Chat Dialogue Part 2](assets/2_slack_customer_chat_part2_escalation.png)
+
+#### 3. Configuration Change Proposed for CAB Approval
+A Change Request (`KAN-55`) is created to apply the correct IP configuration on the Core Gateway, pending approval:
+![Slack CAB Approvals Channel](assets/3_slack_cab_approvals.png)
+
+#### 4. Active Countdown, Breach Escalation & Resolution via Telegram
+The Telegram bot tracks active sessions, editing status messages to show real-time SLA countdowns. If the limit is breached, it flags the ticket and escalates to managers. Finally, it confirms the resolution:
+![Telegram SLA Countdown & Manager Escalation](assets/4_telegram_sla_countdown_alert.png)
+
+---
+
+## AI Incident Tools & Compliance Benefits
+
+To ensure security, auditable trail, and high availability in critical datacenter environments, the multi-agent system enforces strict usage of specialized AI operational tools:
+
+### 1. AI Incident Session Logs
+*   **Description**: A unified history of diagnostic steps, LLM routing logic, execution traces, and state changes recorded under the session state in Redis.
+*   **Benefits**:
+    *   **Auditable Trail**: Provides an immutable record of all automatic decisions and actions executed by the agent team for review.
+    *   **Context Continuity**: Downstream workers (e.g. Customer Advisory Agent) read session logs directly to produce precise, fact-grounded Root Cause Analysis (RCA) reports without missing critical details.
+    *   **Operator Visibility**: Human engineers can quickly fetch full diagnostic history using the `/logs <session_id>` command on Slack/Telegram.
+
+### 2. Command ACL Rules
+*   **Description**: Access Control Lists configured in Redis (`acl:tools:<agent_name>`) that control tool visibility and discovery for each agent.
+*   **Benefits**:
+    *   **Least Privilege Enforcement**: Limits the blast radius by preventing front-facing or triage agents (such as the Customer Advisory Agent) from accessing network-modifying tools.
+    *   **ISO 27001 Alignment**: Ensures strict tenant isolation and access control boundaries are maintained at the tool discovery level.
+    *   **Malicious Request Prevention**: Eliminates the risk of prompt-injection attacks triggering arbitrary CLI executions on physical lab devices.
+
+### 3. Operation Commands (Read-only CLI)
+*   **Description**: Safe, read-only retrieval tools (e.g. `view_network_status`, `get_interface_traffic`, `get_device_logs`) exposing device parameters.
+*   **Benefits**:
+    *   **Risk-free Diagnosis**: Allows agents to query real-time interface rates, optics temperatures, and routing tables without the risk of causing service degradation or configuration corruption.
+    *   **Diagnostic Automation**: Accelerates the triage and diagnostic phase from hours to seconds by querying NetBox, Prometheus, and Loki concurrently.
+
+### 4. Configuration Statements (Junos Config Sets)
+*   **Description**: Automated tools (e.g. `propose_network_change`) that generate and propose targeted Junos configuration sets.
+*   **Benefits**:
+    *   **Syntactic Accuracy**: Leverages the vector RAG database containing Junos reference manuals to draft syntactically valid configuration statements.
+    *   **CAB Approval Gatekeeping**: Intercepts config applications with interactive Block Kit approval prompts in `#noc-cab-approvals`, guaranteeing that no configuration changes can be committed without human L3 verification.
+    *   **Rollback Guarantee**: Pre-arranges safe rollback hooks (`rollback 1`) to easily reverse any configuration changes should post-deployment health checks fail.
+
+
+
