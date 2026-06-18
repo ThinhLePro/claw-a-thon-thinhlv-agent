@@ -495,5 +495,7 @@ To ensure security, auditable trail, and high availability in critical datacente
     *   **CAB Approval Gatekeeping**: Intercepts config applications with interactive Block Kit approval prompts in `#noc-cab-approvals`, guaranteeing that no configuration changes can be committed without human L3 verification.
     *   **Rollback Guarantee**: Pre-arranges safe rollback hooks (`rollback 1`) to easily reverse any configuration changes should post-deployment health checks fail.
 
+![MCP Configuration Statements Dashboard](assets/mcp_configuration_statements.png)
+
 
 
