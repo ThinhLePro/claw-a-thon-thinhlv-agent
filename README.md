@@ -486,6 +486,8 @@ To ensure security, auditable trail, and high availability in critical datacente
     *   **Risk-free Diagnosis**: Allows agents to query real-time interface rates, optics temperatures, and routing tables without the risk of causing service degradation or configuration corruption.
     *   **Diagnostic Automation**: Accelerates the triage and diagnostic phase from hours to seconds by querying NetBox, Prometheus, and Loki concurrently.
 
+![MCP Operation Commands Dashboard](assets/mcp_operation_commands.png)
+
 ### 4. Configuration Statements (Junos Config Sets)
 *   **Description**: Automated tools (e.g. `propose_network_change`) that generate and propose targeted Junos configuration sets.
 *   **Benefits**:
