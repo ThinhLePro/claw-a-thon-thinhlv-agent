@@ -478,6 +478,8 @@ To ensure security, auditable trail, and high availability in critical datacente
     *   **ISO 27001 Alignment**: Ensures strict tenant isolation and access control boundaries are maintained at the tool discovery level.
     *   **Malicious Request Prevention**: Eliminates the risk of prompt-injection attacks triggering arbitrary CLI executions on physical lab devices.
 
+![MCP Command ACL Rules Dashboard](assets/mcp_command_acl_rules.png)
+
 ### 3. Operation Commands (Read-only CLI)
 *   **Description**: Safe, read-only retrieval tools (e.g. `view_network_status`, `get_interface_traffic`, `get_device_logs`) exposing device parameters.
 *   **Benefits**:
