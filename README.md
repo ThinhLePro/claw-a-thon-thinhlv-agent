@@ -469,6 +469,8 @@ To ensure security, auditable trail, and high availability in critical datacente
     *   **Context Continuity**: Downstream workers (e.g. Customer Advisory Agent) read session logs directly to produce precise, fact-grounded Root Cause Analysis (RCA) reports without missing critical details.
     *   **Operator Visibility**: Human engineers can quickly fetch full diagnostic history using the `/logs <session_id>` command on Slack/Telegram.
 
+![MCP AI Incident Session Logs Dashboard](assets/mcp_ai_session_logs.png)
+
 ### 2. Command ACL Rules
 *   **Description**: Access Control Lists configured in Redis (`acl:tools:<agent_name>`) that control tool visibility and discovery for each agent.
 *   **Benefits**:
