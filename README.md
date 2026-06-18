@@ -383,20 +383,6 @@ The worker agents are equipped with Slack utility and web-reading tools to lever
 
 ---
 
-## Interactive NOC Inbound Request Parser Dashboard
-
-To visualize and manually test the Natural Language parsing abilities of the NOC Supervisor, an interactive web interface is hosted on the MCP Server container:
-*   **URL**: `http://localhost:8980/admin/`
-*   **Features**:
-    *   Pre-loaded mock scenarios (peering links down, interface config dump requests, routine maintenance scheduling).
-    *   Simulates the intent classifier, target device extractor, priority levels assignment, and displays the designated worker agent.
-    *   Automatically drafts title and body templates for direct Jira ticket creations.
-    *   **MCP Tools Browser**: A dedicated tab listing all registered tools, their parameters, and expected input schemas in real time.
-
-![MCP Tools Dashboard](assets/mcp_tools_dashboard.png)
-
----
-
 ## Telegram Bot Integration
 
 A background Telegram bot (`telegram_bot.py`) can be enabled on the Supervisor Agent using `TELEGRAM_BOT_TOKEN`:
