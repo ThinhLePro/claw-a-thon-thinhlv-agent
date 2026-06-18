@@ -105,6 +105,7 @@ To solve complex datacenter network incidents while adhering to the ITIL inciden
 *   **Customer Advisory Agent** (`customer-advisory-agent`):
     *   **Role**: L3 Engineer Escalation & Customer Communicator.
     *   **Responsibility**: Reviews incident logs, drafts bilingual customer-facing reports (Root Cause Analysis - RCA), manages internal L3 Slack escalation channels, and transitions the Jira ticket to **DONE**.
+    *   **Active SLA Monitoring & Escalation**: Runs a background thread that monitors active incident session times in Redis, publishes real-time countdown updates on Telegram, and escalates to managers and L3 engineers via a dedicated Telegram channel when the SLA threshold is breached.
 
 ### 2. Multi-Agent Orchestration & Callback Protocol
 
