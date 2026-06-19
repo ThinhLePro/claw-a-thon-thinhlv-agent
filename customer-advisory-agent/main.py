@@ -242,17 +242,38 @@ def edit_telegram_raw(token: str, chat_id: str, message_id: int, text: str) -> b
         logger.error(f"Failed to edit Telegram message {message_id}: {e}")
     return False
 
+def send_slack_raw(token: str, channel: str, text: str) -> dict:
+    url = "https://slack.com/api/chat.postMessage"
+    try:
+        resp = requests.post(url, json={
+            "channel": channel,
+            "text": text
+        }, headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8"
+        }, timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        else:
+            logger.error(f"Slack API error: {resp.status_code} - {resp.text}")
+    except Exception as e:
+        logger.error(f"Failed to send Slack message: {e}")
+    return {}
+
 def run_sla_monitor():
     logger.info("SLA Monitor loop started")
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_SLA_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID")
     sla_threshold = int(os.environ.get("SLA_THRESHOLD_SECONDS", "120"))
 
-    if not bot_token or not chat_id:
-        logger.error("SLA Monitor: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not configured.")
+    slack_token = os.environ.get("SLACK_BOT_TOKEN")
+    slack_channel = os.environ.get("SLACK_CHANNEL_L3_ESCALATION", "C0BCJJVL86L")
+
+    if not (bot_token and chat_id) and not (slack_token and slack_channel):
+        logger.error("SLA Monitor: Neither Telegram nor Slack is fully configured.")
         return
 
-    logger.info(f"SLA Monitor configured with SLA: {sla_threshold}s, Chat ID: {chat_id}")
+    logger.info(f"SLA Monitor configured with SLA: {sla_threshold}s, Chat ID: {chat_id}, Slack Channel: {slack_channel}")
 
     while True:
         try:
@@ -281,7 +302,7 @@ def run_sla_monitor():
                         msg_id = state.get("sla_telegram_message_id")
                         elapsed = int(state.get("sla_elapsed_time", 0))
                         rca = state.get("rca_summary", "No summary available.")
-                        if msg_id:
+                        if msg_id and bot_token and chat_id:
                             edit_text = (
                                 f"✅ <b>[Incident Resolved within SLA]</b>\n"
                                 f"━━━━━━━━━━━━━━━━━━━\n"
@@ -292,7 +313,7 @@ def run_sla_monitor():
                                 f"━━━━━━━━━━━━━━━━━━━"
                             )
                             edit_telegram_raw(bot_token, chat_id, msg_id, edit_text)
-                        else:
+                        elif bot_token and chat_id:
                             # Send direct resolution notification if msg_id wasn't created yet
                             res_text = (
                                 f"✅ <b>[Incident Resolved within SLA]</b>\n"
@@ -343,7 +364,7 @@ def run_sla_monitor():
                 symptoms = state.get("symptoms", "No details available.")
 
                 msg_id = state.get("sla_telegram_message_id")
-                if not msg_id:
+                if not msg_id and bot_token and chat_id:
                     # First time seeing this session, post initial message
                     init_text = (
                         f"🚨 <b>[SLA Countdown Started]</b>\n"
@@ -363,48 +384,65 @@ def run_sla_monitor():
                 else:
                     # Update countdown message
                     if remaining > 0:
-                        update_text = (
-                            f"⏳ <b>[SLA Countdown]</b>\n"
-                            f"━━━━━━━━━━━━━━━━━━━\n"
-                            f"▪️ <b>Session ID</b>: <code>{html.escape(session_id)}</code>\n"
-                            f"▪️ <b>Symptoms</b>: {html.escape(symptoms[:200])}\n"
-                            f"▪️ <b>SLA Limit</b>: {sla_threshold}s\n"
-                            f"▪️ <b>Time Elapsed</b>: {elapsed}s\n"
-                            f"▪️ <b>Remaining Time</b>: <b>{remaining}s</b>\n"
-                            f"━━━━━━━━━━━━━━━━━━━"
-                        )
-                        edit_telegram_raw(bot_token, chat_id, msg_id, update_text)
+                        if bot_token and chat_id and msg_id:
+                            update_text = (
+                                f"⏳ <b>[SLA Countdown]</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━━\n"
+                                f"▪️ <b>Session ID</b>: <code>{html.escape(session_id)}</code>\n"
+                                f"▪️ <b>Symptoms</b>: {html.escape(symptoms[:200])}\n"
+                                f"▪️ <b>SLA Limit</b>: {sla_threshold}s\n"
+                                f"▪️ <b>Time Elapsed</b>: {elapsed}s\n"
+                                f"▪️ <b>Remaining Time</b>: <b>{remaining}s</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━━"
+                            )
+                            edit_telegram_raw(bot_token, chat_id, msg_id, update_text)
                         state["sla_elapsed_time"] = elapsed
                         redis_client.set(key, json.dumps(state))
                     else:
                         # SLA Breached! Escalate if not already done
                         if not state.get("sla_escalated"):
                             # Edit original message to show breach
-                            breach_text = (
-                                f"🔥 <b>[SLA BREACHED & ESCALATED]</b>\n"
-                                f"━━━━━━━━━━━━━━━━━━━\n"
-                                f"▪️ <b>Session ID</b>: <code>{html.escape(session_id)}</code>\n"
-                                f"▪️ <b>Symptoms</b>: {html.escape(symptoms[:200])}\n"
-                                f"▪️ <b>SLA Limit</b>: {sla_threshold}s\n"
-                                f"▪️ <b>Time Elapsed</b>: {elapsed}s (Breached)\n"
-                                f"⚠️ <b>Status</b>: Escalated to L3 Engineer and Manager!\n"
-                                f"━━━━━━━━━━━━━━━━━━━"
-                            )
-                            edit_telegram_raw(bot_token, chat_id, msg_id, breach_text)
+                            if bot_token and chat_id and msg_id:
+                                breach_text = (
+                                    f"🔥 <b>[SLA BREACHED & ESCALATED]</b>\n"
+                                    f"━━━━━━━━━━━━━━━━━━━\n"
+                                    f"▪️ <b>Session ID</b>: <code>{html.escape(session_id)}</code>\n"
+                                    f"▪️ <b>Symptoms</b>: {html.escape(symptoms[:200])}\n"
+                                    f"▪️ <b>SLA Limit</b>: {sla_threshold}s\n"
+                                    f"▪️ <b>Time Elapsed</b>: {elapsed}s (Breached)\n"
+                                    f"⚠️ <b>Status</b>: Escalated to L3 Engineer and Manager!\n"
+                                    f"━━━━━━━━━━━━━━━━━━━"
+                                )
+                                edit_telegram_raw(bot_token, chat_id, msg_id, breach_text)
 
-                            # Send new escalation alert
-                            alert_text = (
-                                f"🚨 <b>[URGENT SLA ESCALATION]</b>\n"
-                                f"━━━━━━━━━━━━━━━━━━━\n"
-                                f"⚠️ <b>Incident SLA Breached!</b>\n"
-                                f"▪️ <b>Session ID</b>: <code>{html.escape(session_id)}</code>\n"
-                                f"▪️ <b>SLA Limit</b>: {sla_threshold}s\n"
-                                f"▪️ <b>Total Elapsed</b>: {elapsed}s\n"
-                                f"▪️ <b>Symptoms</b>: {html.escape(symptoms)}\n\n"
-                                f"📢 <b>Escalating to L3 Engineer & Manager for immediate manual review.</b>\n"
-                                f"━━━━━━━━━━━━━━━━━━━"
-                            )
-                            send_telegram_raw(bot_token, chat_id, alert_text)
+                            # Send new escalation alert to Slack (#noc-l3-escalation)
+                            if slack_token and slack_channel:
+                                slack_alert_text = (
+                                    f"🚨 *[URGENT SLA ESCALATION]*\n"
+                                    f"━━━━━━━━━━━━━━━━━━━\n"
+                                    f"⚠️ *Incident SLA Breached!*\n"
+                                    f"▪️ *Session ID*: `{session_id}`\n"
+                                    f"▪️ *SLA Limit*: {sla_threshold}s\n"
+                                    f"▪️ *Total Elapsed*: {elapsed}s\n"
+                                    f"▪️ *Symptoms*: {symptoms}\n\n"
+                                    f"📢 *Escalating to L3 Engineer & Manager for immediate manual review.*\n"
+                                    f"━━━━━━━━━━━━━━━━━━━"
+                                )
+                                send_slack_raw(slack_token, slack_channel, slack_alert_text)
+                            elif bot_token and chat_id:
+                                # Fallback to Telegram if Slack is not configured
+                                alert_text = (
+                                    f"🚨 <b>[URGENT SLA ESCALATION]</b>\n"
+                                    f"━━━━━━━━━━━━━━━━━━━\n"
+                                    f"⚠️ <b>Incident SLA Breached!</b>\n"
+                                    f"▪️ <b>Session ID</b>: <code>{html.escape(session_id)}</code>\n"
+                                    f"▪️ <b>SLA Limit</b>: {sla_threshold}s\n"
+                                    f"▪️ <b>Total Elapsed</b>: {elapsed}s\n"
+                                    f"▪️ <b>Symptoms</b>: {html.escape(symptoms)}\n\n"
+                                    f"📢 <b>Escalating to L3 Engineer & Manager for immediate manual review.</b>\n"
+                                    f"━━━━━━━━━━━━━━━━━━━"
+                                )
+                                send_telegram_raw(bot_token, chat_id, alert_text)
                             
                             state["sla_escalated"] = True
                             state["sla_elapsed_time"] = elapsed

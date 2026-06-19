@@ -2049,7 +2049,7 @@ def send_notification(audience_type: str, message: str, session_id: str = "") ->
             channel = os.environ.get("SLACK_CHANNEL_CUSTOMER", "#all-customer-001")
         prefix = "📢 *Customer Update:*\n"
     elif aud == "l3_engineer":
-        channel = os.environ.get("SLACK_CHANNEL_ALERTS", "#noc-l3-alerts")
+        channel = os.environ.get("SLACK_CHANNEL_L3_ESCALATION") or "C0BCJJVL86L"
         prefix = "🚨 *L3 Engineer Escalation:*\n"
     else:
         return f"Error: Unknown audience_type '{audience_type}'. Must be 'L3_Engineer' or 'Customer'."
@@ -3942,9 +3942,9 @@ if __name__ == "__main__":
                             except Exception as tg_err:
                                 logger.error(f"Failed to send escalation telegram message: {tg_err}")
                         
-                        # Send slack notification to #noc-l3-alerts
+                        # Send slack notification to #noc-l3-escalation
                         slack_token = os.environ.get("SLACK_BOT_TOKEN")
-                        slack_channel = os.environ.get("SLACK_CHANNEL_ALERTS", "C0BAPPKR8RZ")
+                        slack_channel = os.environ.get("SLACK_CHANNEL_L3_ESCALATION", "C0BCJJVL86L")
                         if slack_token and slack_channel:
                             try:
                                 req_lib.post(
