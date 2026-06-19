@@ -244,8 +244,8 @@ def edit_telegram_raw(token: str, chat_id: str, message_id: int, text: str) -> b
 
 def run_sla_monitor():
     logger.info("SLA Monitor loop started")
-    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "8959607183:AAGCjYTIWsdMiw8SEDdQQGEWGUbZR7iK-uA")
-    chat_id = os.environ.get("TELEGRAM_SLA_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID", "6405110990")
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_SLA_CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID")
     sla_threshold = int(os.environ.get("SLA_THRESHOLD_SECONDS", "120"))
 
     if not bot_token or not chat_id:
