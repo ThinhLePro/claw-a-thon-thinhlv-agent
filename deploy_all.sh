@@ -76,6 +76,7 @@ for AGENT_NAME in "${!AGENTS[@]}"; do
         --image "$IMAGE_URL" \
         --flavor "$FLAVOR" \
         --env-file "./$AGENT_NAME/.env" \
+        --min-replicas 1 \
         --from-cr \
         --description "Deploy update for $AGENT_NAME"
   else
@@ -90,6 +91,7 @@ for AGENT_NAME in "${!AGENTS[@]}"; do
             --image "$IMAGE_URL" \
             --flavor "$FLAVOR" \
             --env-file "./$AGENT_NAME/.env" \
+            --min-replicas 1 \
             --from-cr \
             --description "Deploy update for $AGENT_NAME"
       else
@@ -99,6 +101,7 @@ for AGENT_NAME in "${!AGENTS[@]}"; do
             --image "$IMAGE_URL" \
             --flavor "$FLAVOR" \
             --env-file "./$AGENT_NAME/.env" \
+            --min-replicas 1 \
             --from-cr \
             --description "Create agent $AGENT_NAME")
           RUNTIME_ID=$(echo "$CREATE_RESP" | jq -r '.id')
