@@ -203,10 +203,51 @@ def connect_device(device_name: str) -> Device:
 
         raise ConnectionError(f"All SSH connection attempts failed for {resolved_name}. Last error: {last_err}")
     elif connection_method == "api":
-        raise NotImplementedError(
-            f"API connection method is not yet implemented for {resolved_name}. "
-            f"Please configure the device to use 'netconf' or 'ssh' connection method."
-        )
+        if vendor == "arista":
+            import pyeapi
+            transport = "https"
+            if port in [80, 8080]:
+                transport = "http"
+
+            creds_to_try = []
+            if NETCONF_USER and NETCONF_PASSWORD:
+                creds_to_try.append((NETCONF_USER, NETCONF_PASSWORD))
+            for fallback_user, fallback_pass in [("admin", "vnd@123#"), ("admin", "admin"), ("root", "vnd@123#")]:
+                if (fallback_user, fallback_pass) not in creds_to_try:
+                    creds_to_try.append((fallback_user, fallback_pass))
+
+            last_err = None
+            for username, password in creds_to_try:
+                logger.info(f"Attempting pyeapi connection to {resolved_name} ({ip}:{port}) via {transport} with user '{username}'...")
+                try:
+                    import ssl
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+
+                    connection = pyeapi.client.connect(
+                        transport=transport,
+                        host=ip,
+                        username=username,
+                        password=password,
+                        port=port,
+                        timeout=15,
+                        context=ctx
+                    )
+                    node = pyeapi.client.Node(connection)
+                    # Verify by running show version
+                    node.enable('show version')
+                    logger.info(f"Successfully connected to Arista device {resolved_name} via pyeapi!")
+                    return node
+                except Exception as e:
+                    logger.warning(f"Failed pyeapi connection to {resolved_name} ({ip}:{port}) using user '{username}': {e}")
+                    last_err = e
+
+            raise ConnectionError(f"All pyeapi connection attempts failed for {resolved_name}. Last error: {last_err}")
+        else:
+            raise NotImplementedError(
+                f"API connection method is not yet implemented for vendor '{vendor}' on {resolved_name}."
+            )
     else:
         raise ValueError(f"Unknown connection method '{connection_method}' for device '{resolved_name}'.")
 
@@ -301,7 +342,23 @@ def execute_command_on_device(device_name: str, command: str, timeout: int = Non
         return f"Error executing SSH command '{command}' on '{device_name}': All connection attempts failed. Last error: {last_err}"
 
     elif connection_method == "api":
-        return f"API connection method is not yet implemented for device '{device_name}'."
+        device_info_full = _resolve_device_info(device_name)
+        vendor = device_info_full.get("vendor", "juniper")
+        if vendor == "arista":
+            try:
+                node = pool.get(device_name)
+                responses = node.enable(command)
+                if not responses:
+                    return f"No output returned by command '{command}' on {device_name}."
+                res = responses[0]['result']
+                if isinstance(res, dict):
+                    return json.dumps(res, indent=2)
+                else:
+                    return str(res)
+            except Exception as e:
+                return f"Error executing API command '{command}' on '{device_name}': {e}"
+        else:
+            return f"API connection method is not yet implemented for vendor '{vendor}' on '{device_name}'."
     else:
         return f"Unknown connection method '{connection_method}' for device '{device_name}'."
 
@@ -337,7 +394,9 @@ class DeviceConnectionPool:
                 dev, _ = self._pool[resolved_name]
                 try:
                     is_connected = False
-                    if hasattr(dev, "connected"):
+                    if dev.__class__.__name__ == "Node":
+                        is_connected = True
+                    elif hasattr(dev, "connected"):
                         is_connected = dev.connected
                     elif hasattr(dev, "is_alive"):
                         is_connected = dev.is_alive()
@@ -575,6 +634,36 @@ def get_device_detail(device_name: str) -> str:
     """
     logger.info(f"Executing tool: get_device_detail for {device_name}")
     try:
+        device_info = _resolve_device_info(device_name)
+        vendor = device_info.get("vendor", "juniper")
+        if vendor == "arista":
+            node = pool.get(device_name)
+            show_ver = node.enable('show version')[0]['result']
+            uptime_seconds = show_ver.get('uptime')
+            uptime_str = "Unknown"
+            if uptime_seconds is not None:
+                try:
+                    uptime_val = float(uptime_seconds)
+                    days = int(uptime_val // 86400)
+                    hours = int((uptime_val % 86400) // 3600)
+                    minutes = int((uptime_val % 3600) // 60)
+                    uptime_str = f"{days} days, {hours} hours, {minutes} minutes"
+                except Exception:
+                    uptime_str = str(uptime_seconds)
+
+            details = [
+                f"Device Details for {show_ver.get('hostname', device_name)} (Live Facts - Arista):",
+                f"  IP Address: {device_info.get('ip')}",
+                f"  Model:      {show_ver.get('modelName') or node.model}",
+                f"  OS Version: {show_ver.get('version') or node.version}",
+                f"  Serial:     {show_ver.get('serialNumber') or 'N/A'}",
+                f"  Uptime:     {uptime_str}",
+                f"  System MAC: {show_ver.get('systemMacAddress') or 'N/A'}",
+                f"  Mem Total:  {show_ver.get('memTotal') or 'N/A'}",
+                f"  Mem Free:   {show_ver.get('memFree') or 'N/A'}"
+            ]
+            return "\n".join(details)
+
         dev = pool.get(device_name)
         facts = dev.facts
 
@@ -603,6 +692,25 @@ def get_commit_history(device_name: str) -> str:
     """
     logger.info(f"Executing tool: get_device_configuration_list for {device_name}")
     try:
+        device_info = _resolve_device_info(device_name)
+        vendor = device_info.get("vendor", "juniper")
+        if vendor == "arista":
+            node = pool.get(device_name)
+            res = node.enable("show configuration sessions detail")
+            sessions_data = res[0]['result']
+            sessions = sessions_data.get("sessions", {})
+            if not sessions:
+                return f"No configuration sessions found on Arista device '{device_name}'."
+
+            result = [f"Configuration Sessions detail for {device_name}:"]
+            for s_name, s_info in sessions.items():
+                state = s_info.get("state", "Unknown")
+                user = s_info.get("username", "Unknown")
+                created = s_info.get("createdTime", "Unknown")
+                desc = s_info.get("description") or "No description"
+                result.append(f"- Session: {s_name} | State: {state} | User: {user} | Created: {created} | Desc: {desc}")
+            return "\n".join(result)
+
         dev = pool.get(device_name)
         res = dev.rpc.get_commit_information()
 
@@ -633,6 +741,32 @@ def get_device_config(device_name: str, config_type: str = "active") -> str:
     """
     logger.info(f"Executing tool: get_device_configuration_detail for {device_name} (filter: {config_type})")
     try:
+        device_info = _resolve_device_info(device_name)
+        vendor = device_info.get("vendor", "juniper")
+        if vendor == "arista":
+            node = pool.get(device_name)
+            if config_type and config_type.lower() != "active":
+                try:
+                    content = node.section(config_type)
+                except Exception as e:
+                    return f"No configuration found on {device_name} matching filter '{config_type}': {e}"
+            else:
+                content = node.get_config(config='running-config', as_string=True)
+
+            if not content:
+                return f"No configuration found on {device_name} matching filter '{config_type}'."
+
+            # Truncate if too large
+            MAX_LEN = 100000
+            if len(content) > MAX_LEN:
+                truncated = content[:MAX_LEN]
+                return (
+                    f"--- Configuration for {device_name} (Truncated - first {MAX_LEN} chars) ---\n"
+                    f"{truncated}\n\n"
+                    f"... [TRUNCATED due to length ({len(content)} chars)]"
+                )
+            return f"--- Configuration for {device_name} (filter: '{config_type}') ---\n{content}"
+
         dev = pool.get(device_name)
 
         # Build XML filter if hierarchy block path is specified
@@ -1334,6 +1468,48 @@ def get_device_hardware(device_name: str) -> str:
     """
     logger.info(f"Executing tool: get_device_hardware for {device_name}")
     try:
+        device_info = _resolve_device_info(device_name)
+        vendor = device_info.get("vendor", "juniper")
+        if vendor == "arista":
+            node = pool.get(device_name)
+            res = node.enable("show inventory")[0]['result']
+
+            result = []
+            sys_info = res.get("systemInformation", {})
+            desc = sys_info.get("description") or sys_info.get("name") or "Arista Switch"
+            serial = sys_info.get("serialNum") or "N/A"
+            rev = sys_info.get("hardwareRev") or "N/A"
+            result.append(f"Chassis: {desc} | Serial: {serial} | Rev: {rev}")
+
+            ps_slots = res.get("powerSupplySlots", {})
+            for ps_id, ps_info in ps_slots.items():
+                name = ps_info.get("name") or "PowerSupply"
+                ps_serial = ps_info.get("serialNum") or "N/A"
+                result.append(f"  - PowerSupply {ps_id} | Name: {name} | Serial: {ps_serial}")
+
+            fan_slots = res.get("fanTraySlots", {})
+            for fan_id, fan_info in fan_slots.items():
+                name = fan_info.get("name") or "Fan"
+                fan_serial = fan_info.get("serialNum") or "N/A"
+                result.append(f"  - FanTray {fan_id} | Name: {name} | Serial: {fan_serial}")
+
+            xcvr_slots = res.get("xcvrSlots", {})
+            for slot_id, xcvr_info in xcvr_slots.items():
+                mfg = xcvr_info.get("mfgName")
+                if mfg and mfg != "Not Present":
+                    model = xcvr_info.get("modelName") or "N/A"
+                    xcvr_serial = xcvr_info.get("serialNum") or "N/A"
+                    result.append(f"  - Transceiver {slot_id} | Manufacturer: {mfg} | Part: {model} | Serial: {xcvr_serial}")
+
+            storage = res.get("storageDevices", {})
+            for st_name, st_info in storage.items():
+                st_type = st_info.get("storageType") or "Disk"
+                st_serial = st_info.get("serialNum") or "N/A"
+                st_size = st_info.get("storageSize") or "N/A"
+                result.append(f"  - Storage {st_name} | Type: {st_type} | Size: {st_size} GB | Serial: {st_serial}")
+
+            return f"Hardware Inventory for {device_name}:\n" + "\n".join(result)
+
         dev = pool.get(device_name)
         res = dev.rpc.get_chassis_inventory()
         chassis = res.find('chassis')
@@ -1461,7 +1637,7 @@ def get_network_topology() -> str:
         node_data = {
             "hostname": name,
             "management_ip": ip,
-            "device_type": "Juniper" if connection_method == "netconf" else "Ubuntu",
+            "device_type": "Juniper" if connection_method == "netconf" else ("Arista" if connection_method == "api" else "Ubuntu"),
             "model": info.get("model", "Unknown"),
             "os_version": "Unknown",
             "physical_links": [],
@@ -1519,6 +1695,66 @@ def get_network_topology() -> str:
                         node_data["logical_bundles"].append({"name": ae, "members": members})
                 except Exception as e:
                     logger.warning(f"Failed to get logical bundles for Juniper {name}: {e}")
+                    
+            elif connection_method == "api":
+                dev = pool.get(name)
+                
+                # OS Version
+                try:
+                    show_ver = dev.enable("show version")[0]['result']
+                    node_data["os_version"] = show_ver.get("version", "Unknown")
+                except Exception:
+                    pass
+                
+                # LLDP
+                try:
+                    res_lldp = dev.enable("show lldp neighbors")[0]['result']
+                    lldp_list = res_lldp.get("lldpNeighbors", [])
+                    connections = []
+                    for item in lldp_list:
+                        connections.append({
+                            "local_interface": item.get("port"),
+                            "parent_bundle": None,
+                            "remote_port": item.get("neighborPort"),
+                            "remote_hostname": item.get("neighborDevice")
+                        })
+                    node_data["physical_links"] = connections
+                except Exception as e:
+                    logger.warning(f"Failed to get LLDP for Arista {name}: {e}")
+                    
+                # BGP Sessions
+                try:
+                    res_bgp = dev.enable("show ip bgp neighbors")[0]['result']
+                    peers = []
+                    vrfs = res_bgp.get("vrfs", {})
+                    for vrf_name, vrf_data in vrfs.items():
+                        peers_dict = vrf_data.get("peers", {})
+                        for peer_ip, peer_data in peers_dict.items():
+                            peers.append({
+                                "peer_ip": peer_ip,
+                                "peer_as": str(peer_data.get("remoteAS", "Unknown")),
+                                "peer_state": peer_data.get("neighborState", "Unknown"),
+                                "description": peer_data.get("description") or "N/A"
+                            })
+                    node_data["bgp_sessions"] = peers
+                except Exception as e:
+                    logger.warning(f"Failed to get BGP for Arista {name}: {e}")
+                    
+                # Bundles
+                try:
+                    res_pc = dev.enable("show port-channel")[0]['result']
+                    pc_dict = res_pc.get("portChannels", {})
+                    for pc_name, pc_data in pc_dict.items():
+                        members = []
+                        active_ports = pc_data.get("activePorts", {})
+                        for member_name in active_ports.keys():
+                            members.append(member_name)
+                        inactive_ports = pc_data.get("inactivePorts", {})
+                        for member_name in inactive_ports.keys():
+                            members.append(member_name)
+                        node_data["logical_bundles"].append({"name": pc_name, "members": members})
+                except Exception as e:
+                    logger.warning(f"Failed to get logical bundles for Arista {name}: {e}")
                     
             elif connection_method == "ssh":
                 # Ubuntu/Linux
@@ -1690,6 +1926,14 @@ def ping_from_device(device_name: str, destination: str, count: int = 5) -> str:
     """
     logger.info(f"Executing tool: ping_from_device from {device_name} to {destination}")
     try:
+        device_info = _resolve_device_info(device_name)
+        vendor = device_info.get("vendor", "juniper")
+        if vendor == "arista":
+            node = pool.get(device_name)
+            res = node.enable(f"ping {destination} repeat {count}", encoding="text")
+            content = res[0]['result']['output']
+            return f"--- Ping from {device_name} to {destination} ---\n{content}"
+
         dev = pool.get(device_name)
         res = dev.rpc.cli(f"ping {destination} count {count} rapid", format='text')
         content = res.text or res.findtext('cli-out') or "No output"
@@ -1697,9 +1941,6 @@ def ping_from_device(device_name: str, destination: str, count: int = 5) -> str:
     except Exception as e:
         logger.error(f"Failed to execute ping: {e}")
         return f"Error executing ping from '{device_name}' to '{destination}': {e}"
-
-
-
 
 
 @mcp.tool()
@@ -1711,6 +1952,14 @@ def check_device_alarms(device_name: str) -> str:
     """
     logger.info(f"Executing tool: check_device_alarms for {device_name}")
     try:
+        device_info = _resolve_device_info(device_name)
+        vendor = device_info.get("vendor", "juniper")
+        if vendor == "arista":
+            node = pool.get(device_name)
+            res = node.enable("show system environment all", encoding="text")
+            env_text = res[0]['result']['output']
+            return f"--- Environment Status on {device_name} ---\n{env_text}"
+
         dev = pool.get(device_name)
         sys_alarms = dev.rpc.cli("show system alarms", format='text')
         chassis_alarms = dev.rpc.cli("show chassis alarms", format='text')
@@ -1732,6 +1981,14 @@ def get_interface_diagnostics(device_name: str, interface_name: str) -> str:
     """
     logger.info(f"Executing tool: get_interface_diagnostics for {device_name} {interface_name}")
     try:
+        device_info = _resolve_device_info(device_name)
+        vendor = device_info.get("vendor", "juniper")
+        if vendor == "arista":
+            node = pool.get(device_name)
+            res = node.enable(f"show interfaces {interface_name} transceiver", encoding="text")
+            content = res[0]['result']['output']
+            return f"--- Interface Diagnostics: {device_name} {interface_name} ---\n{content}"
+
         dev = pool.get(device_name)
         res = dev.rpc.cli(f"show interfaces diagnostics optics {interface_name}", format='text')
         content = res.text or res.findtext('cli-out') or "No diagnostics data available"
@@ -3156,6 +3413,59 @@ def _execute_config_change(device_name: str, config_payload: str, description: s
     steps_log = []
 
     try:
+        device_info = _resolve_device_info(device_name)
+        vendor = device_info.get("vendor", "juniper")
+        if vendor == "arista":
+            node = pool.get(device_name)
+            session_name = f"session_{int(time.time())}"
+
+            # Step 1: Backup current config
+            try:
+                backup_text = node.get_config(config='running-config', as_string=True)
+                steps_log.append(f"✅ Step 1: Config backup captured ({len(backup_text)} chars)")
+            except Exception as e:
+                steps_log.append(f"⚠️ Step 1: Backup warning (non-fatal): {e}")
+
+            # Step 2: Lock configuration database - Arista configuration sessions provide isolation
+            try:
+                node._session_name = session_name
+                steps_log.append(f"✅ Step 2: Configuration session '{session_name}' initialized")
+            except Exception as e:
+                steps_log.append(f"❌ Step 2: Failed to initialize session: {e}")
+                return False, "\n".join(steps_log)
+
+            try:
+                # Step 3: Load proposed configuration
+                commands = [line.strip() for line in config_payload.split("\n") if line.strip()]
+                node.config(commands)
+                steps_log.append("✅ Step 3: Configuration loaded into session")
+
+                # Step 4: Commit check / Validate syntax
+                node.config("commit check")
+                steps_log.append("✅ Step 4: Commit check passed")
+
+                # Step 5: Commit confirmed 3 (rollback in 3 minutes)
+                node.config("commit timer 00:03:00")
+                steps_log.append("✅ Step 5: Commit confirmed 3 — change active (auto-rollback in 3 min if not confirmed)")
+
+                # Step 6: Final commit (confirm the change permanently)
+                node._session_name = None
+                node.config(f"configure session {session_name} commit")
+                steps_log.append("✅ Step 6: Final commit — change confirmed permanently")
+
+            except Exception as load_err:
+                steps_log.append(f"❌ Failed at loading/committing: {load_err}")
+                logger.warning(f"Config change failed on {device_name}. Discarding session...")
+                try:
+                    node._session_name = None
+                    node.config(f"configure session {session_name} abort")
+                    steps_log.append("↩️ Session aborted successfully (changes discarded)")
+                except Exception as ab_err:
+                    steps_log.append(f"⚠️ Abort session error: {ab_err}")
+                return False, "\n".join(steps_log)
+
+            return True, "\n".join(steps_log)
+
         dev = pool.get(device_name)
         cu = Config(dev)
 

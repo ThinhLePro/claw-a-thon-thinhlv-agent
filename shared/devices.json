@@ -79,6 +79,26 @@
       "connection_method": "ssh",
       "role": "Server",
       "status": "Online"
+    },
+    "LAB-ARISTA-01": {
+      "name": "LAB-ARISTA-01",
+      "ip": "10.116.1.104",
+      "port": 443,
+      "model": "Arista EOS Switch",
+      "vendor": "arista",
+      "connection_method": "api",
+      "role": "Leaf",
+      "status": "Online"
+    },
+    "LAB-ARISTA-02": {
+      "name": "LAB-ARISTA-02",
+      "ip": "10.116.1.105",
+      "port": 443,
+      "model": "Arista EOS Switch",
+      "vendor": "arista",
+      "connection_method": "api",
+      "role": "Leaf",
+      "status": "Online"
     }
   }
 }
